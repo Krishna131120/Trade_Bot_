@@ -15,15 +15,14 @@ load_dotenv()
 # JWT authentication permanently disabled - open access API
 ENABLE_AUTH = False
 
-# JWT Configuration - DEPRECATED (auth removed)
-# These settings are kept for backward compatibility but are not used
-# JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'default-key-for-optional-auth')
-# JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
-# JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
+# JWT Configuration - kept for backward compatibility (auth is disabled but auth.py imports these)
+JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'default-key-for-optional-auth')
+JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
+JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 
-# Admin Credentials - DEPRECATED (auth removed)
-# ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
-# ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'admin123')
+# Admin Credentials - kept for backward compatibility (auth is disabled but auth.py imports these)
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'admin123')
 
 # Rate Limiting
 RATE_LIMIT_PER_MINUTE = int(os.getenv('RATE_LIMIT_PER_MINUTE', '10'))

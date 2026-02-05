@@ -17,7 +17,7 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 import logging
 from pathlib import Path
@@ -92,21 +92,23 @@ SECURITY_LOG_PATH = Path("data/logs/security.jsonl")
 # JWT authentication removed - no login models needed
 
 class PredictRequest(BaseModel):
-    symbols: List[str] = Field(..., min_items=1, max_items=50)
+    symbols: List[str] = Field(..., min_length=1, max_length=50)
     horizon: str = Field(default="intraday")
     risk_profile: Optional[str] = Field(None)
     stop_loss_pct: Optional[float] = Field(None, ge=0.1, le=50.0)
     capital_risk_pct: Optional[float] = Field(None, ge=0.1, le=100.0)
     drawdown_limit_pct: Optional[float] = Field(None, ge=0.1, le=100.0)
     
-    @validator('symbols')
+    @field_validator('symbols', mode='after')
+    @classmethod
     def validate_symbols_not_empty(cls, v):
         """Ensure symbols list is not empty and normalize to uppercase"""
         if not v or len(v) == 0:
             raise ValueError('At least one symbol must be provided')
         return [s.upper().strip() for s in v]
     
-    @validator('horizon')
+    @field_validator('horizon', mode='after')
+    @classmethod
     def validate_horizon_value(cls, v):
         """Validate horizon is one of the allowed values"""
         valid_horizons = ['intraday', 'short', 'long']
@@ -114,7 +116,8 @@ class PredictRequest(BaseModel):
             raise ValueError(f'Invalid horizon. Valid options: {", ".join(valid_horizons)}')
         return v.lower()
     
-    @validator('risk_profile')
+    @field_validator('risk_profile', mode='after')
+    @classmethod
     def validate_risk_profile_value(cls, v):
         """Validate risk profile if provided"""
         if v is not None:
@@ -126,20 +129,22 @@ class PredictRequest(BaseModel):
 
 
 class ScanAllRequest(BaseModel):
-    symbols: List[str] = Field(..., min_items=1, max_items=100)
+    symbols: List[str] = Field(..., min_length=1, max_length=100)
     horizon: str = Field(default="intraday")
     min_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
     stop_loss_pct: Optional[float] = Field(None, ge=0.1, le=50.0)
     capital_risk_pct: Optional[float] = Field(None, ge=0.1, le=100.0)
     
-    @validator('symbols')
+    @field_validator('symbols', mode='after')
+    @classmethod
     def validate_symbols_list(cls, v):
         """Ensure symbols list is not empty and normalize"""
         if not v or len(v) == 0:
             raise ValueError('At least one symbol must be provided')
         return [s.upper().strip() for s in v]
     
-    @validator('horizon')
+    @field_validator('horizon', mode='after')
+    @classmethod
     def validate_horizon_value(cls, v):
         """Validate horizon is one of the allowed values"""
         valid_horizons = ['intraday', 'short', 'long']
@@ -150,19 +155,21 @@ class ScanAllRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=20)
-    horizons: List[str] = Field(default=["intraday"], min_items=1, max_items=3)
+    horizons: List[str] = Field(default=["intraday"], min_length=1, max_length=3)
     stop_loss_pct: float = Field(default=2.0, ge=0.1, le=50.0)
     capital_risk_pct: float = Field(default=1.0, ge=0.1, le=100.0)
     drawdown_limit_pct: float = Field(default=5.0, ge=0.1, le=100.0)
     
-    @validator('symbol')
+    @field_validator('symbol', mode='after')
+    @classmethod
     def validate_symbol_format(cls, v):
         """Normalize symbol to uppercase and validate not empty"""
         if not v.strip():
             raise ValueError('Symbol cannot be empty')
         return v.upper().strip()
     
-    @validator('horizons')
+    @field_validator('horizons', mode='after')
+    @classmethod
     def validate_horizons_list(cls, v):
         """Validate each horizon and normalize"""
         if not v or len(v) == 0:
@@ -180,12 +187,14 @@ class FeedbackRequest(BaseModel):
     user_feedback: str = Field(...)
     actual_return: Optional[float] = Field(None, ge=-100.0, le=1000.0)
     
-    @validator('symbol')
+    @field_validator('symbol', mode='after')
+    @classmethod
     def validate_symbol_format(cls, v):
         """Normalize symbol to uppercase"""
         return v.upper().strip()
     
-    @validator('predicted_action')
+    @field_validator('predicted_action', mode='after')
+    @classmethod
     def validate_and_uppercase_action(cls, v):
         """Validate and normalize predicted action"""
         valid_actions = ['LONG', 'SHORT', 'HOLD']
@@ -193,7 +202,8 @@ class FeedbackRequest(BaseModel):
             raise ValueError(f'Invalid predicted_action. Valid options: {", ".join(valid_actions)}')
         return v.upper()
     
-    @validator('user_feedback')
+    @field_validator('user_feedback', mode='after')
+    @classmethod
     def validate_and_lowercase_feedback(cls, v):
         """Validate and normalize user feedback"""
         valid_feedback = ['correct', 'incorrect']
@@ -201,7 +211,8 @@ class FeedbackRequest(BaseModel):
             raise ValueError(f'Invalid user_feedback. Valid options: {", ".join(valid_feedback)}')
         return v.lower()
     
-    @validator('actual_return')
+    @field_validator('actual_return', mode='after')
+    @classmethod
     def validate_return_range(cls, v):
         """Validate actual return is within reasonable range"""
         if v is not None:
@@ -219,12 +230,14 @@ class TrainRLRequest(BaseModel):
     n_episodes: int = Field(default=10, ge=10, le=100)
     force_retrain: bool = False
     
-    @validator('symbol')
+    @field_validator('symbol', mode='after')
+    @classmethod
     def validate_symbol_format(cls, v):
         """Normalize symbol to uppercase"""
         return v.upper().strip()
     
-    @validator('horizon')
+    @field_validator('horizon', mode='after')
+    @classmethod
     def validate_horizon_value(cls, v):
         """Validate horizon is one of the allowed values"""
         valid_horizons = ['intraday', 'short', 'long']
@@ -234,19 +247,21 @@ class TrainRLRequest(BaseModel):
 
 
 class FetchDataRequest(BaseModel):
-    symbols: List[str] = Field(..., min_items=1, max_items=100)
+    symbols: List[str] = Field(..., min_length=1, max_length=100)
     period: str = Field(default="2y")
     include_features: bool = False
     refresh: bool = False
     
-    @validator('symbols')
+    @field_validator('symbols', mode='after')
+    @classmethod
     def validate_symbols_list(cls, v):
         """Ensure symbols list is not empty and normalize"""
         if not v or len(v) == 0:
             raise ValueError('At least one symbol must be provided')
         return [s.upper().strip() for s in v]
     
-    @validator('period')
+    @field_validator('period', mode='after')
+    @classmethod
     def validate_period_value(cls, v):
         """Validate period is one of the allowed values"""
         valid_periods = ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
@@ -798,13 +813,16 @@ if __name__ == '__main__':
     print("  POST /tools/train_rl  - Train RL agent")
     print("  POST /tools/fetch_data - Fetch batch data")
     print("\nDOCUMENTATION:")
-    print(f"  Swagger UI: http://{config.UVICORN_HOST}:{config.UVICORN_PORT}/docs")
-    print(f"  ReDoc: http://{config.UVICORN_HOST}:{config.UVICORN_PORT}/redoc")
+    # Show accessible URLs (not 0.0.0.0 which is not accessible in browsers)
+    accessible_host = "127.0.0.1" if config.UVICORN_HOST == "0.0.0.0" else config.UVICORN_HOST
+    print(f"  Swagger UI: http://{accessible_host}:{config.UVICORN_PORT}/docs")
+    print(f"  ReDoc: http://{accessible_host}:{config.UVICORN_PORT}/redoc")
     print("\nACCESS MODE:")
     print("  Status: OPEN ACCESS")
     print("  Authentication: None required")
     print("  All endpoints available without login")
-    print(f"\nServer starting on http://{config.UVICORN_HOST}:{config.UVICORN_PORT}")
+    print(f"\n>>> SERVER ACCESSIBLE AT: http://{accessible_host}:{config.UVICORN_PORT} <<<")
+    print(f">>> OPEN IN BROWSER: http://localhost:{config.UVICORN_PORT}/docs <<<")
     print("="*80 + "\n")
     
     # Security warning for debug mode
