@@ -20,6 +20,7 @@ from stock_analysis_complete import (
     get_symbol_cache_path
 )
 from request_cache import backend_cache
+import config
 
 app = FastAPI(title="Stock Analysis API", version="1.0.0")
 
@@ -528,7 +529,7 @@ async def tools_train_models(request: PredictRequest):
 if __name__ == "__main__":
     import uvicorn
     print("Starting Stock Analysis API Server...")
-    print("Server will be available at: http://127.0.0.1:8000")
-    print("API Documentation: http://127.0.0.1:8000/docs")
+    print(f"Server will be available at: http://127.0.0.1:{config.UVICORN_PORT}")
+    print(f"API Documentation: http://127.0.0.1:{config.UVICORN_PORT}/docs")
     
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=config.UVICORN_PORT)

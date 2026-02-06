@@ -37,7 +37,7 @@ API_TITLE = "Stock Prediction MCP API"
 API_VERSION = "3.0"
 API_DESCRIPTION = "Secure MCP-style REST API with JWT auth, rate limiting, and validation"
 UVICORN_HOST = os.getenv('UVICORN_HOST', '0.0.0.0')
-UVICORN_PORT = int(os.getenv('UVICORN_PORT', '8000'))
+UVICORN_PORT = int(os.getenv('UVICORN_PORT', '5000'))
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 
 # Directories
