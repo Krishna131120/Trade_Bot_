@@ -36,6 +36,19 @@ import config
 from config import LOGS_DIR
 from live_price_validator import LivePriceValidator
 
+# Memory logging utility
+def log_memory_usage(label: str = ""):
+    """Log current memory usage"""
+    try:
+        process = psutil.Process()
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        print(f"[MEMORY] {label}: {mem_mb:.1f} MB")
+        logger.info(f"Memory usage {label}: {mem_mb:.1f} MB")
+        return mem_mb
+    except Exception as e:
+        logger.warning(f"Could not log memory: {e}")
+        return 0
+
 # Initialize FastAPI app
 app = FastAPI(
     title=config.API_TITLE,
@@ -51,6 +64,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
         "https://trade-bot-frontend-halb.onrender.com"
     ],
     allow_credentials=True,
@@ -417,6 +434,9 @@ async def predict(
 ):
     """Generate predictions for symbols (NO AUTH REQUIRED)"""
     try:
+        # Log memory at start
+        log_memory_usage("Predict endpoint START")
+        
         data = predict_data.dict()
         data = sanitize_input(data)
         
@@ -435,6 +455,8 @@ async def predict(
         if not risk_validation['valid']:
             raise HTTPException(status_code=400, detail=risk_validation['error'])
         
+        log_memory_usage("Before MCP adapter call")
+        
         result = mcp_adapter.predict(
             symbols=data['symbols'],
             horizon=data['horizon'],
@@ -444,6 +466,7 @@ async def predict(
             drawdown_limit_pct=data.get('drawdown_limit_pct')
         )
         
+        log_memory_usage("After MCP adapter call")
         log_api_request('/tools/predict', data, result, 200)
         
         return result

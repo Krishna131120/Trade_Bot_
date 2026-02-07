@@ -80,6 +80,21 @@ def get_symbol_cache_path(symbol: str) -> Path:
     return DATA_CACHE_DIR / f"{symbol}_all_data.json"
 
 
+def log_memory_usage(label: str = ""):
+    """Log current memory usage"""
+    try:
+        import psutil
+        import os
+        process = psutil.Process(os.getpid())
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        print(f"[MEMORY] {label}: {mem_mb:.1f} MB")
+        logger.info(f"Memory usage {label}: {mem_mb:.1f} MB")
+        return mem_mb
+    except Exception as e:
+        logger.warning(f"Could not log memory: {e}")
+        return 0
+
+
 # Set random seeds for reproducibility
 RANDOM_SEED = 42
 torch.manual_seed(RANDOM_SEED)
