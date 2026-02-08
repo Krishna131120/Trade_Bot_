@@ -48,8 +48,15 @@ export const BackendStatusProvider: React.FC<{ children: React.ReactNode }> = ({
 
   useEffect(() => {
     checkStatus();
+    // Retry after 5s and 15s on load (backend may be waking up on Render)
+    const t1 = setTimeout(checkStatus, 5000);
+    const t2 = setTimeout(checkStatus, 15000);
     const interval = setInterval(checkStatus, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearInterval(interval);
+    };
   }, []);
 
   return (

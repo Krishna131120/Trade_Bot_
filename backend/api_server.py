@@ -24,6 +24,9 @@ from pathlib import Path
 from datetime import datetime
 import json
 import psutil
+import threading
+import uuid
+import time
 
 from core.mcp_adapter import MCPAdapter
 # JWT authentication removed - open access API
@@ -93,6 +96,41 @@ price_validator = LivePriceValidator()
 # API request logging
 API_LOG_PATH = Path("data/logs/api_requests.jsonl")
 SECURITY_LOG_PATH = Path("data/logs/security.jsonl")
+
+# Async predict: in-memory job store (job_id -> { status, result?, error?, created_at })
+_predict_jobs: Dict[str, Dict[str, Any]] = {}
+_predict_jobs_lock = threading.Lock()
+JOB_EXPIRE_SECONDS = 3600  # 1 hour
+
+
+def _run_predict_job(job_id: str, data: dict) -> None:
+    try:
+        with _predict_jobs_lock:
+            _predict_jobs[job_id]["status"] = "running"
+        result = mcp_adapter.predict(
+            symbols=data["symbols"],
+            horizon=data["horizon"],
+            risk_profile=data.get("risk_profile"),
+            stop_loss_pct=data.get("stop_loss_pct"),
+            capital_risk_pct=data.get("capital_risk_pct"),
+            drawdown_limit_pct=data.get("drawdown_limit_pct"),
+        )
+        with _predict_jobs_lock:
+            _predict_jobs[job_id]["status"] = "completed"
+            _predict_jobs[job_id]["result"] = result
+    except Exception as e:
+        logger.exception(f"Async predict job {job_id} failed")
+        with _predict_jobs_lock:
+            _predict_jobs[job_id]["status"] = "failed"
+            _predict_jobs[job_id]["error"] = str(e)
+
+
+def _prune_old_jobs() -> None:
+    now = time.time()
+    with _predict_jobs_lock:
+        expired = [jid for jid, j in _predict_jobs.items() if (now - j.get("created_at", 0)) > JOB_EXPIRE_SECONDS]
+        for jid in expired:
+            del _predict_jobs[jid]
 
 
 # ==================== Pydantic Models ====================
@@ -347,6 +385,8 @@ async def index():
             '/auth/status': 'GET - Check rate limit status',
             '/tools/health': 'GET - System health',
             '/tools/predict': 'POST - Generate predictions (NO AUTH)',
+            '/tools/predict/async': 'POST - Start prediction, returns job_id; poll /tools/predict/result/{job_id}',
+            '/tools/predict/result/{job_id}': 'GET - Get async prediction result (202=running, 200=done)',
             '/tools/scan_all': 'POST - Scan and rank symbols (NO AUTH)',
             '/tools/analyze': 'POST - Analyze with risk parameters (NO AUTH)',
             '/tools/feedback': 'POST - Provide feedback (NO AUTH)',
@@ -458,6 +498,71 @@ async def predict(
         error_response = {'error': str(e)}
         log_api_request('/tools/predict', predict_data.dict(), error_response, 500)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/predict/async")
+async def predict_async(
+    request: Request,
+    predict_data: PredictRequest,
+    client_ip: str = Depends(check_rate_limit)
+):
+    """Start prediction in background; returns job_id immediately. Poll GET /tools/predict/result/{job_id} for result."""
+    try:
+        data = predict_data.dict()
+        data = sanitize_input(data)
+        validation = validate_symbols(data['symbols'])
+        if not validation['valid']:
+            raise HTTPException(status_code=400, detail=validation['error'])
+        if not validate_horizon(data['horizon']):
+            raise HTTPException(status_code=400, detail='Invalid horizon. Valid options: intraday, short, long')
+        risk_validation = validate_risk_parameters(
+            data.get('stop_loss_pct'), data.get('capital_risk_pct'), data.get('drawdown_limit_pct')
+        )
+        if not risk_validation['valid']:
+            raise HTTPException(status_code=400, detail=risk_validation['error'])
+
+        _prune_old_jobs()
+        job_id = str(uuid.uuid4())
+        with _predict_jobs_lock:
+            _predict_jobs[job_id] = {
+                "status": "pending",
+                "result": None,
+                "error": None,
+                "created_at": time.time(),
+            }
+        thread = threading.Thread(target=_run_predict_job, args=(job_id, data), daemon=True)
+        thread.start()
+        return {
+            "job_id": job_id,
+            "status": "accepted",
+            "message": f"Poll GET /tools/predict/result/{job_id} for result (may take 2–10 minutes).",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Predict async error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tools/predict/result/{job_id}")
+async def predict_result(job_id: str):
+    """Get status and result of an async prediction job. Returns 202 while running, 200 with result when done."""
+    _prune_old_jobs()
+    with _predict_jobs_lock:
+        job = _predict_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired.")
+    status = job["status"]
+    if status == "pending" or status == "running":
+        return JSONResponse(status_code=202, content={"job_id": job_id, "status": status})
+    if status == "completed":
+        return job["result"]
+    if status == "failed":
+        return JSONResponse(
+            status_code=200,
+            content={"status": "failed", "job_id": job_id, "error": job.get("error", "Unknown error")},
+        )
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": status})
 
 
 @app.post("/tools/scan_all")
