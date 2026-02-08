@@ -182,12 +182,18 @@ class MCPAdapter:
                     if not features_path.exists():
                         print(f"[STEP 2/4] Features not found. Calculating 50+ technical indicators...", flush=True)
                         logger.info(f"[{request_id}] Features not found for {symbol}. Calculating...")
+                        print("[pipe] load_all_data...", flush=True)
                         all_data = self.ingester.load_all_data(symbol)
+                        print("[pipe] load_all_data done", flush=True)
                         if all_data:
                             df = all_data.get('price_history')
                             if df is not None and not df.empty:
+                                print("[pipe] calculate_all_features...", flush=True)
                                 features_df = self.engineer.calculate_all_features(df, symbol)
+                                print("[pipe] calculate_all_features done", flush=True)
+                                print("[pipe] save_features...", flush=True)
                                 self.engineer.save_features(features_df, symbol)
+                                print("[pipe] save_features done", flush=True)
                                 print(f"[STEP 2/4] [OK] Features calculated successfully!\n", flush=True)
                                 logger.info(f"[{request_id}] Features calculated for {symbol}")
                     
@@ -202,8 +208,10 @@ class MCPAdapter:
                         print(f"            This will take 60-90 seconds...\n", flush=True)
                         logger.info(f"[{request_id}] Models not found for {symbol} ({horizon}). Training...")
                         try:
+                            print("[pipe] train_ml_models...", flush=True)
                             from stock_analysis_complete import train_ml_models
                             training_result = train_ml_models(symbol, horizon, verbose=True)
+                            print("[pipe] train_ml_models done", flush=True)
                             
                             # Handle both dict and bool return formats
                             success = training_result.get('success', False) if isinstance(training_result, dict) else training_result
@@ -233,7 +241,9 @@ class MCPAdapter:
                     
                     # STEP 4: Get prediction
                     print(f"[STEP 4/4] Generating prediction using ensemble of 4 models...", flush=True)
+                    print("[pipe] predict_stock_price...", flush=True)
                     prediction = predict_stock_price(symbol, horizon=horizon, verbose=True)
+                    print("[pipe] predict_stock_price done", flush=True)
                     print(f"[STEP 4/4] [OK] Prediction generated!\n", flush=True)
                     
                     if prediction:

@@ -1501,26 +1501,20 @@ class FeatureEngineer:
             features_df = self._calculate_advanced_analytics(features_df)
             
             # Handle NaN values intelligently
-            print(f"  -> Cleaning NaN values...", flush=True)
-            
-            # Replace infinite values with NaN first (IN-PLACE for performance)
+            print("[feat] clean: replace inf...", flush=True)
             features_df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            
-            # Forward fill NaN values (limited to 5 days) (IN-PLACE)
+            print("[feat] clean: ffill...", flush=True)
             features_df.ffill(limit=5, inplace=True)
-            
-            # Backward fill remaining NaN (for beginning of dataset) (IN-PLACE)
+            print("[feat] clean: bfill...", flush=True)
             features_df.bfill(limit=5, inplace=True)
-            
-            # Fill any remaining NaN with 0 (safer than dropping) (IN-PLACE)
+            print("[feat] clean: fillna(0)...", flush=True)
             features_df.fillna(0, inplace=True)
-            
-            # Only drop rows where Close price is missing (critical)
+            print("[feat] clean: drop Close<=0...", flush=True)
             if 'Close' in features_df.columns:
                 features_df = features_df[features_df['Close'] > 0]
-            
+            print("[feat] clean: done", flush=True)
             logger.info(f"Feature calculation complete for {symbol}: {features_df.shape[1]} columns, {len(features_df)} rows")
-            print(f"[OK] Feature calculation complete: {features_df.shape[1]} columns, {len(features_df)} rows")
+            print(f"[OK] Feature calculation complete: {features_df.shape[1]} columns, {len(features_df)} rows", flush=True)
             
             return features_df
             
@@ -1552,28 +1546,36 @@ class FeatureEngineer:
         df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
         print("[feat] momentum: ROC...", flush=True)
         df['ROC'] = ta.roc(df['Close'], length=12)
-        print("[feat] momentum: TRIX, CMO, Aroon, UO...", flush=True)
+        print("[feat] momentum: TRIX...", flush=True)
         trix = ta.trix(df['Close'], length=15)
         if trix is not None:
             df['TRIX'] = trix.iloc[:, 0] if isinstance(trix, pd.DataFrame) else trix
+        print("[feat] momentum: CMO...", flush=True)
         df['CMO'] = ta.cmo(df['Close'], length=14)
+        print("[feat] momentum: Aroon...", flush=True)
         aroon = ta.aroon(df['High'], df['Low'], length=25)
         if aroon is not None:
             df['AROON_up'] = aroon['AROONU_25']
             df['AROON_down'] = aroon['AROOND_25']
             df['AROON_osc'] = df['AROON_up'] - df['AROON_down']
+        print("[feat] momentum: UO...", flush=True)
         df['UO'] = ta.uo(df['High'], df['Low'], df['Close'])
         print("[feat] momentum: done", flush=True)
         return df
     
     def _calculate_trend_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate trend indicators (11+ indicators)"""
-        print("[feat] trend: SMA, EMA...", flush=True)
+        print("[feat] trend: SMA_10...", flush=True)
         df['SMA_10'] = ta.sma(df['Close'], length=10)
+        print("[feat] trend: SMA_20...", flush=True)
         df['SMA_20'] = ta.sma(df['Close'], length=20)
+        print("[feat] trend: SMA_50...", flush=True)
         df['SMA_50'] = ta.sma(df['Close'], length=50)
+        print("[feat] trend: SMA_200...", flush=True)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
+        print("[feat] trend: EMA_12...", flush=True)
         df['EMA_12'] = ta.ema(df['Close'], length=12)
+        print("[feat] trend: EMA_26...", flush=True)
         df['EMA_26'] = ta.ema(df['Close'], length=26)
         print("[feat] trend: ADX...", flush=True)
         adx = ta.adx(df['High'], df['Low'], df['Close'], length=14)
@@ -1587,17 +1589,19 @@ class FeatureEngineer:
             psar_long = psar.iloc[:, 0] if isinstance(psar, pd.DataFrame) else psar
             psar_short = psar.iloc[:, 1] if isinstance(psar, pd.DataFrame) and psar.shape[1] > 1 else None
             df['PSAR'] = psar_long.fillna(psar_short) if psar_short is not None else psar_long
-        print("[feat] trend: KC, Donchian, alignment...", flush=True)
+        print("[feat] trend: KC...", flush=True)
         kc = ta.kc(df['High'], df['Low'], df['Close'], length=20)
         if kc is not None:
             df['KC_upper'] = kc['KCUe_20_2']
             df['KC_middle'] = kc['KCBe_20_2']
             df['KC_lower'] = kc['KCLe_20_2']
+        print("[feat] trend: Donchian...", flush=True)
         dc = ta.donchian(df['High'], df['Low'], lower_length=20, upper_length=20)
         if dc is not None:
             df['DC_upper'] = dc['DCU_20_20']
             df['DC_middle'] = dc['DCM_20_20']
             df['DC_lower'] = dc['DCL_20_20']
+        print("[feat] trend: MA_alignment, trend_direction...", flush=True)
         df['MA_alignment'] = (
             (df['SMA_10'] > df['SMA_20']).astype(int) +
             (df['SMA_20'] > df['SMA_50']).astype(int) +
@@ -1612,7 +1616,7 @@ class FeatureEngineer:
     
     def _calculate_volatility_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate volatility indicators (5+ indicators)"""
-        print("[feat] volatility: BB, ATR, STD...", flush=True)
+        print("[feat] volatility: bbands...", flush=True)
         bbands = ta.bbands(df['Close'], length=20, std=2)
         if bbands is not None:
             cols = bbands.columns.tolist()
@@ -1624,7 +1628,9 @@ class FeatureEngineer:
                     df['BB_width'] = bbands.iloc[:, 3]
                 if len(cols) >= 5:
                     df['BB_pct'] = bbands.iloc[:, 4]
+        print("[feat] volatility: ATR...", flush=True)
         df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+        print("[feat] volatility: STD_20, volatility_20...", flush=True)
         df['STD_20'] = df['Close'].rolling(window=20).std()
         returns = df['Close'].pct_change()
         df['volatility_20'] = returns.rolling(window=20).std() * np.sqrt(252)
@@ -1633,13 +1639,19 @@ class FeatureEngineer:
     
     def _calculate_volume_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate volume indicators (7+ indicators)"""
-        print("[feat] volume: OBV, AD, CMF, VROC, EMV...", flush=True)
+        print("[feat] volume: OBV...", flush=True)
         df['OBV'] = ta.obv(df['Close'], df['Volume'])
+        print("[feat] volume: Volume_SMA_20...", flush=True)
         df['Volume_SMA_20'] = ta.sma(df['Volume'], length=20)
+        print("[feat] volume: AD...", flush=True)
         df['AD'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume'])
+        print("[feat] volume: CMF...", flush=True)
         df['CMF'] = ta.cmf(df['High'], df['Low'], df['Close'], df['Volume'], length=20)
+        print("[feat] volume: VROC...", flush=True)
         df['VROC'] = ta.roc(df['Volume'], length=12)
+        print("[feat] volume: EMV...", flush=True)
         df['EMV'] = ta.eom(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
+        print("[feat] volume: volume_ratio, volume_trend...", flush=True)
         df['volume_ratio'] = df['Volume'] / (df['Volume_SMA_20'] + 1e-10)
         df['volume_trend'] = np.where(df['Volume'] > df['Volume_SMA_20'], 1, -1)
         print("[feat] volume: done", flush=True)
@@ -1647,12 +1659,13 @@ class FeatureEngineer:
     
     def _calculate_support_resistance(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate support/resistance levels (5+ indicators)"""
-        print("[feat] support_resistance: pivot, fib...", flush=True)
+        print("[feat] support_resistance: pivot...", flush=True)
         df['pivot'] = (df['High'] + df['Low'] + df['Close']) / 3
         df['pivot_r1'] = 2 * df['pivot'] - df['Low']
         df['pivot_s1'] = 2 * df['pivot'] - df['High']
         df['pivot_r2'] = df['pivot'] + (df['High'] - df['Low'])
         df['pivot_s2'] = df['pivot'] - (df['High'] - df['Low'])
+        print("[feat] support_resistance: rolling, fib, price_position...", flush=True)
         window = 50
         rolling_high = df['High'].rolling(window=window).max()
         rolling_low = df['Low'].rolling(window=window).min()
@@ -1667,12 +1680,13 @@ class FeatureEngineer:
     
     def _calculate_pattern_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate pattern recognition features (5+ features)"""
-        print("[feat] pattern: doji, hammer...", flush=True)
+        print("[feat] pattern: cdl_doji...", flush=True)
         doji = ta.cdl_doji(df['Open'], df['High'], df['Low'], df['Close'])
         if doji is not None:
             df['CDL_DOJI'] = doji.iloc[:, 0].fillna(0).astype(int) if isinstance(doji, pd.DataFrame) else doji.fillna(0).astype(int)
         else:
             df['CDL_DOJI'] = 0
+        print("[feat] pattern: cdl_pattern hammer...", flush=True)
         hammer = ta.cdl_pattern(df['Open'], df['High'], df['Low'], df['Close'], name='hammer')
         if hammer is not None:
             df['CDL_HAMMER'] = hammer.iloc[:, 0].fillna(0).astype(int) if isinstance(hammer, pd.DataFrame) else hammer.fillna(0).astype(int)
@@ -1698,7 +1712,7 @@ class FeatureEngineer:
     
     def _calculate_advanced_analytics(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate advanced analytics (8+ features)"""
-        print("[feat] advanced: price_to_sma, divergence, VWAP...", flush=True)
+        print("[feat] advanced: price_to_sma, divergence, bb_position...", flush=True)
         df['price_to_sma_10'] = df['Close'] / (df['SMA_10'] + 1e-10)
         df['price_to_sma_50'] = df['Close'] / (df['SMA_50'] + 1e-10)
         df['price_to_sma_200'] = df['Close'] / (df['SMA_200'] + 1e-10)
@@ -1707,15 +1721,18 @@ class FeatureEngineer:
         df['rsi_divergence'] = (price_trend != rsi_trend).astype(int)
         df['macd_hist_increasing'] = (df['MACD_hist'] > df['MACD_hist'].shift(1)).astype(int)
         df['bb_position'] = (df['Close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'] + 1e-10)
+        print("[feat] advanced: VWAP...", flush=True)
         df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+        print("[feat] advanced: daily_return, daily_return_ma_5...", flush=True)
         df['daily_return'] = df['Close'].pct_change()
         df['daily_return_ma_5'] = df['daily_return'].rolling(window=5).mean()
-        print("[feat] advanced: sharpe, autocorr...", flush=True)
         returns = df['daily_return']
+        print("[feat] advanced: sharpe_20...", flush=True)
         df['sharpe_20'] = (
             returns.rolling(window=20).mean() /
             (returns.rolling(window=20).std() + 1e-10)
         ) * np.sqrt(252)
+        print("[feat] advanced: returns_autocorr...", flush=True)
         df['returns_autocorr'] = returns.rolling(window=20).apply(
             lambda x: x.autocorr(), raw=False
         )
@@ -1983,6 +2000,7 @@ class StockPricePredictor:
         overfitting_warnings = []
         
         # 1. Random Forest with adaptive complexity
+        print("[train] RF: fitting...", flush=True)
         print("\n[1/3] Training Random Forest...")
         
         # Adaptive complexity based on data size
@@ -2063,8 +2081,10 @@ class StockPricePredictor:
         print(f"   Train R²: {rf_score_train:.4f} | Test R²: {rf_score_test:.4f} | Gap: {train_test_gap:+.4f}")
         print(f"   Train RMSE: {rf_rmse_train:.2f} | Test RMSE: {rf_rmse_test:.2f}")
         print(f"   Test MAE: {rf_mae_test:.2f}")
+        print("[train] RF: done", flush=True)
         
         # 2. LightGBM with early stopping and adaptive complexity
+        print("[train] LGB: fitting...", flush=True)
         print("\n[2/3] Training LightGBM...")
         
         # Split train into train and validation for early stopping
@@ -2161,8 +2181,10 @@ class StockPricePredictor:
         print(f"   Train R²: {lgb_score_train:.4f} | Test R²: {lgb_score_test:.4f} | Gap: {train_test_gap:+.4f}")
         print(f"   Train RMSE: {lgb_rmse_train:.2f} | Test RMSE: {lgb_rmse_test:.2f}")
         print(f"   Test MAE: {lgb_mae_test:.2f}")
+        print("[train] LGB: done", flush=True)
         
         # 3. XGBoost with early stopping and adaptive complexity
+        print("[train] XGB: fitting...", flush=True)
         print("\n[3/3] Training XGBoost...")
         
         # Split train into train and validation for early stopping
@@ -2275,6 +2297,7 @@ class StockPricePredictor:
         print(f"   Train R²: {xgb_score_train:.4f} | Test R²: {xgb_score_test:.4f} | Gap: {train_test_gap:+.4f}")
         print(f"   Train RMSE: {xgb_rmse_train:.2f} | Test RMSE: {xgb_rmse_test:.2f}")
         print(f"   Test MAE: {xgb_mae_test:.2f}")
+        print("[train] XGB: done", flush=True)
         
         # Ensemble prediction with weighted average (exclude models with negative R²)
         # Weight models by their test R² performance (better models get more weight)
@@ -2395,7 +2418,9 @@ class StockPricePredictor:
             for model_name in self.models.keys():
                 model_path = self.model_dir / f"{symbol}_{self.horizon}_{model_name}.pkl"
                 if model_path.exists():
+                    print(f"[predict] load {model_name}...", flush=True)
                     self.models[model_name] = joblib.load(model_path)
+                    print(f"[predict] load {model_name} done", flush=True)
                     logger.info(f"Loaded {model_name} model from {model_path}")
                 else:
                     logger.warning(f"Model not found: {model_path}")
@@ -2404,7 +2429,9 @@ class StockPricePredictor:
             # Load feature columns
             feature_path = self.model_dir / f"{symbol}_{self.horizon}_features.pkl"
             if feature_path.exists():
+                print("[predict] load features.pkl...", flush=True)
                 self.feature_columns = joblib.load(feature_path)
+                print("[predict] load features.pkl done", flush=True)
             else:
                 logger.warning(f"Feature columns not found: {feature_path}")
                 return False
@@ -3635,6 +3662,7 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         print("  4. DQN Agent (Deep Reinforcement Learning)")
         print("="*80)
     
+    print("[train] start", flush=True)
     # Check if features exist
     cache_path = get_symbol_cache_path(symbol)
     
@@ -3644,6 +3672,7 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
             print(f"Please fetch data and calculate features first (Option 1 & 2)")
         return False
     
+    print("[train] load cache...", flush=True)
     # Load data from JSON
     with open(cache_path, 'r') as f:
         cached_data = json.load(f)
@@ -3660,12 +3689,15 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         if verbose:
             print(f"\n[ERROR] No price history found in cached data")
         return False
+    print("[train] load cache done", flush=True)
     
     # Calculate features if not already done
     engineer = FeatureEngineer()
+    print("[train] calculate_all_features (in train_ml_models)...", flush=True)
     if verbose:
         print(f"\n[INFO] Calculating technical indicators...")
     features_df = engineer.calculate_all_features(df, symbol)
+    print("[train] calculate_all_features done", flush=True)
     
     if features_df.empty:
         if verbose:
@@ -3673,10 +3705,12 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         return False
     
     # Prepare data for ML (for price prediction models)
+    print("[train] prepare_data...", flush=True)
     if verbose:
         print(f"\n[INFO] Preparing data for machine learning...")
     predictor = StockPricePredictor(horizon=horizon)
     X, y, feature_cols = predictor.prepare_data(features_df, target_days=target_days)
+    print("[train] prepare_data done", flush=True)
     predictor.feature_columns = feature_cols
     
     if verbose:
@@ -3694,7 +3728,9 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         print(f"   Testing samples: {len(X_test)}")
     
     # ========== PART 1: Train Price Prediction Models (RF, LightGBM, XGBoost) ==========
+    print("[train] train_models (RF+LGB+XGB)...", flush=True)
     results = predictor.train_models(X_train, y_train, X_test, y_test)
+    print("[train] train_models done", flush=True)
     
     # Display model comparison
     if verbose:
@@ -3708,7 +3744,9 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
             print(f"{model_name.upper():<20} {metrics['r2']:<15.4f} {metrics['rmse']:<15.2f} {metrics['mae']:<15.2f}")
     
     # Save price prediction models
+    print("[train] save_models...", flush=True)
     predictor.save_models(symbol)
+    print("[train] save_models done", flush=True)
     
     # Show feature importance
     if verbose:
@@ -3724,6 +3762,7 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
                 print(f"   {row['feature']:<30} {row['importance']:.4f}")
     
     # ========== PART 2: Train DQN Agent (Reinforcement Learning) ==========
+    print("[train] DQN: prepare data...", flush=True)
     if verbose:
         print(f"\n{'='*80}")
         print("TRAINING DQN AGENT (REINFORCEMENT LEARNING)")
@@ -3734,6 +3773,7 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
     
     # Create properly structured DataFrame for DQN with EXACT same features
     dqn_features_df = features_df[feature_cols].copy()
+    print("[train] DQN: data prepared", flush=True)
     
     # Extract returns for reward calculation (must match the length)
     returns_series = features_df['daily_return'].iloc[:len(dqn_features_df)]
@@ -3745,6 +3785,7 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         print(f"   Training samples:   {len(dqn_features_df)}")
         print(f"   Returns samples:    {len(returns_series)}")
     
+    print("[train] DQN: init agent...", flush=True)
     dqn_agent = DQNTradingAgent(
         n_features=len(feature_cols),  # EXACT same as other models
         learning_rate=0.001,
@@ -3760,6 +3801,7 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
     # CRITICAL: Store feature columns in agent for consistency
     # This ensures training and prediction use EXACTLY the same features
     dqn_agent.feature_columns = feature_cols.copy()  # Use copy to prevent mutation
+    print("[train] DQN: init done", flush=True)
     
     # VALIDATION: Verify feature dimensions match
     if len(feature_cols) != dqn_agent.n_features:
@@ -3776,7 +3818,9 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         print(f"   Feature columns saved: {len(feature_cols)} (will be used in prediction)")
     
     # Train DQN with the properly prepared features
+    print("[train] DQN: train (episodes)...", flush=True)
     dqn_metrics = dqn_agent.train(dqn_features_df, returns_series, n_episodes=len(dqn_features_df))
+    print("[train] DQN: train done", flush=True)
     
     if verbose:
         print(f"\n{'='*80}")
@@ -3791,7 +3835,10 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         print(f"   Replay Buffer Size: {dqn_metrics['buffer_size']}")
     
     # Save DQN agent
+    print("[train] DQN: save...", flush=True)
     dqn_agent.save(symbol, horizon)
+    print("[train] DQN: save done", flush=True)
+    print("[train] all done", flush=True)
     
     if verbose:
         print(f"\n{'='*80}")
@@ -3824,6 +3871,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
     # Initialize warning flags list (used throughout the function)
     warning_flags = []
     
+    print("[predict] start", flush=True)
     if verbose:
         print("\n" + "="*80)
         print(" " * 15 + f"STOCK PRICE PREDICTION - {horizon.upper()}")
@@ -3831,6 +3879,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
     
     # Load price prediction models (RF, LightGBM, XGBoost)
     predictor = StockPricePredictor(horizon=horizon)
+    print("[predict] load_models (RF+LGB+XGB+features)...", flush=True)
     if not predictor.load_models(symbol):
         if verbose:
             print(f"\n[INFO] No trained models found for {symbol} ({horizon})")
@@ -3852,12 +3901,15 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
         
         if verbose:
             print(f"[OK] Models auto-trained and loaded successfully!")
+    print("[predict] load_models done", flush=True)
     
     # Load DQN agent
+    print("[predict] load DQN...", flush=True)
     dqn_agent = DQNTradingAgent(n_features=1)  # Will be updated when loading
     try:
         dqn_agent.load(symbol, horizon)
         dqn_available = True
+        print("[predict] load DQN done", flush=True)
         if verbose:
             print(f"[OK] DQN agent loaded successfully")
     except FileNotFoundError as e:
@@ -3913,6 +3965,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
         logger.error(f"DQN loading failed for {symbol} ({horizon}): {type(e).__name__}: {e}", exc_info=True)
     
     # Load historical 2y data + latest live prices
+    print("[predict] load data (ingester)...", flush=True)
     ingester = EnhancedDataIngester()
     
     if verbose:
@@ -3923,6 +3976,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
     
     # Try to load 2y cached data first
     all_data = ingester.load_all_data(symbol)
+    print("[predict] load data done", flush=True)
     
     # Extract news data for sentiment analysis
     news_data = all_data.get('news', []) if all_data else []
@@ -4049,6 +4103,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
         return None
     
     # Calculate features
+    print("[predict] calculate_all_features (for prediction)...", flush=True)
     engineer = FeatureEngineer()
     if verbose:
         print(f"\n[INFO] Calculating technical indicators...")
@@ -4058,6 +4113,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
         df.index = df.index.tz_localize(None)
     
     features_df = engineer.calculate_all_features(df, symbol)
+    print("[predict] calculate_all_features done", flush=True)
     
     if features_df.empty:
         print(f"\n[ERROR] Feature calculation failed")
@@ -4092,7 +4148,9 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
         historical_volatility = None
     
     # Make predictions with validation
+    print("[predict] ensemble predict (RF+LGB+XGB)...", flush=True)
     price_predictions = predictor.predict(latest_features, current_price=latest_price, historical_volatility=historical_volatility)
+    print("[predict] ensemble predict done", flush=True)
     
     # ========== OVERFITTING ANALYSIS: Analyze what prices models are predicting ==========
     prediction_analysis = {}
@@ -4241,7 +4299,9 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
         
         # Make prediction only if validation passed
         if dqn_available:
+            print("[predict] DQN predict...", flush=True)
             dqn_action, dqn_q_value, dqn_confidence = dqn_agent.predict(latest_feature_array)
+            print("[predict] DQN predict done", flush=True)
     
     # ========== PART 3: Display All Predictions ==========
     print(f"\n{'='*80}")
@@ -4957,6 +5017,7 @@ def predict_stock_price(symbol: str, horizon: str = "intraday", verbose: bool = 
     if 'dqn' in individual_preds:
         formatted_individual['dqn'] = individual_preds['dqn']
     
+    print("[predict] done", flush=True)
     # Build prediction response
     prediction_response = {
         "symbol": symbol,
