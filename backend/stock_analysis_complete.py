@@ -1,4 +1,4 @@
-﻿"""
+"""
 Complete Stock Analysis Tool - All-in-One
 Fetches and views financial data from Yahoo Finance
 Integrated with 50+ Technical Indicators
@@ -1247,6 +1247,65 @@ class EnhancedDataIngester:
         # Auto-save to cache
         self._save_to_cache(symbol, all_data)
         
+        return all_data
+    
+    def fetch_price_only(self, symbol: str, period: str = "2y") -> Dict:
+        """
+        Fetch only OHLCV price history for prediction (fast path).
+        Skips company info, fundamentals, earnings, news, etc. Saves to same cache format.
+        """
+        print(f"[INFO] Fetching price data only for {symbol} (fast path)...")
+        ticker = yf.Ticker(symbol)
+        all_data = {}
+        data_source = "yfinance"
+        try:
+            print(f"  [1/1] Fetching price history...")
+            all_data["price_history"] = ticker.history(period=period)
+            all_data["price_history_metadata"] = {
+                "rows": len(all_data["price_history"]),
+                "start_date": str(all_data["price_history"].index[0]) if not all_data["price_history"].empty else None,
+                "end_date": str(all_data["price_history"].index[-1]) if not all_data["price_history"].empty else None,
+                "data_source": "yfinance",
+            }
+            if all_data["price_history"].empty:
+                raise ValueError("Empty DataFrame from yfinance")
+            print(f"    [OK] Price history: {len(all_data['price_history'])} rows")
+        except Exception as e:
+            print(f"    [ERROR] {e}")
+            if (symbol.endswith(".NS") or symbol.endswith(".BO")) and hasattr(self, "fetch_nse_bhav_historical"):
+                try:
+                    end_date = datetime.now()
+                    start_date = end_date - timedelta(days=730)
+                    df_bhav = self.fetch_nse_bhav_historical(symbol, start_date, end_date)
+                    if not df_bhav.empty:
+                        if "Dividends" not in df_bhav.columns:
+                            df_bhav["Dividends"] = 0.0
+                        if "Stock Splits" not in df_bhav.columns:
+                            df_bhav["Stock Splits"] = 0.0
+                        expected_cols = ["Open", "High", "Low", "Close", "Volume", "Dividends", "Stock Splits"]
+                        df_bhav = df_bhav[[c for c in expected_cols if c in df_bhav.columns]]
+                        df_bhav = self._clean_data(df_bhav)
+                        all_data["price_history"] = df_bhav
+                        all_data["price_history_metadata"] = {"rows": len(df_bhav), "data_source": "nse_bhav"}
+                        data_source = "nse_bhav"
+                        print(f"    [OK] Price from NSE Bhav: {len(df_bhav)} rows")
+                    else:
+                        all_data["price_history"] = pd.DataFrame()
+                except Exception as e2:
+                    all_data["price_history"] = pd.DataFrame()
+            else:
+                all_data["price_history"] = pd.DataFrame()
+        all_data["info"] = {}
+        all_data["key_metrics"] = {}
+        all_data["news"] = []
+        all_data["metadata"] = {
+            "symbol": symbol,
+            "fetch_timestamp": datetime.now().isoformat(),
+            "period": period,
+            "data_source": data_source,
+        }
+        if not all_data.get("price_history", pd.DataFrame()).empty:
+            self._save_to_cache(symbol, all_data)
         return all_data
     
     def _save_to_cache(self, symbol: str, all_data: Dict):

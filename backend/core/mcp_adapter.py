@@ -159,10 +159,10 @@ class MCPAdapter:
                     json_path = DATA_CACHE_DIR / f"{symbol}_all_data.json"
                     
                     if not json_path.exists():
-                        print(f"[STEP 1/4] Data not found for {symbol}. Fetching from Yahoo Finance...", flush=True)
+                        print(f"[STEP 1/4] Data not found for {symbol}. Fetching price data (fast path)...", flush=True)
                         logger.info(f"[{request_id}] Data not found for {symbol}. Fetching...")
                         try:
-                            self.ingester.fetch_all_data(symbol, period="2y")
+                            self.ingester.fetch_price_only(symbol, period="2y")
                             print(f"[STEP 1/4] [OK] Data fetched successfully!\n", flush=True)
                             logger.info(f"[{request_id}] Data fetched for {symbol}")
                         except Exception as e:
@@ -364,10 +364,10 @@ class MCPAdapter:
                     json_path = DATA_CACHE_DIR / f"{symbol}_all_data.json"
                     
                     if not json_path.exists():
-                        print(f"[STEP 1/4] Fetching data from Yahoo Finance...", flush=True)
+                        print(f"[STEP 1/4] Fetching price data (fast path)...", flush=True)
                         logger.info(f"[{request_id}] Data not found for {symbol}. Fetching...")
                         try:
-                            self.ingester.fetch_all_data(symbol, period="2y")
+                            self.ingester.fetch_price_only(symbol, period="2y")
                             print(f"[STEP 1/4] [OK] Data fetched!\n", flush=True)
                             logger.info(f"[{request_id}] Data fetched for {symbol}")
                         except Exception as e:
@@ -523,7 +523,7 @@ class MCPAdapter:
                 print(f"\n[ANALYZE] Fetching data for {symbol}...", flush=True)
                 logger.info(f"[{request_id}] Data not found for {symbol}. Fetching...")
                 try:
-                    self.ingester.fetch_all_data(symbol, period="2y")
+                    self.ingester.fetch_price_only(symbol, period="2y")
                     print(f"[ANALYZE] [OK] Data fetched!\n", flush=True)
                 except Exception as e:
                     print(f"[ANALYZE] [FAIL] Data fetch failed: {e}\n", flush=True)
@@ -735,9 +735,9 @@ class MCPAdapter:
             json_path = DATA_CACHE_DIR / f"{symbol}_all_data.json"
             
             if not json_path.exists():
-                logger.info(f"[{request_id}] Data not found. Fetching from Yahoo Finance...")
+                logger.info(f"[{request_id}] Data not found. Fetching price data (fast path)...")
                 try:
-                    self.ingester.fetch_all_data(symbol, period="2y")
+                    self.ingester.fetch_price_only(symbol, period="2y")
                     logger.info(f"[{request_id}] Data fetched successfully")
                 except Exception as e:
                     logger.error(f"[{request_id}] Data fetch failed: {e}")
