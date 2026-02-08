@@ -52,12 +52,16 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       setLastHealthCheck(new Date());
     } catch (error: any) {
-      setHealth({
-        healthy: false,
-        status: 'error',
-        timestamp: new Date(),
-        message: error.message || 'Health check failed',
-      });
+      // Don't mark offline on timeout — backend may be busy with a long prediction
+      const isTimeout = error?.code === 'ECONNABORTED' || error?.message?.includes('timeout');
+      if (!isTimeout) {
+        setHealth({
+          healthy: false,
+          status: 'error',
+          timestamp: new Date(),
+          message: error.message || 'Health check failed',
+        });
+      }
       setLastHealthCheck(new Date());
     } finally {
       setIsPolling(false);

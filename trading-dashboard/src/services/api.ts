@@ -34,7 +34,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 300000, // 5 minutes - first run per symbol can take 2–4 min (fetch + features + model)
+  timeout: 480000, // 8 minutes - first run on Render can take 4–6 min (fetch + features + model)
   withCredentials: false, // CORS is handled by backend
 });
 
@@ -490,13 +490,13 @@ export const stockAPI = {
   health: async (retries: number = 2): Promise<any> => {
     try {
       const response = await api.get('/tools/health', {
-        timeout: 15000, // 15 seconds for health check
+        timeout: 25000, // 25s — backend may be busy with prediction
       });
       return response.data;
     } catch (error: any) {
       // Retry on timeout or connection errors
       if (retries > 0 && (error.code === 'ECONNABORTED' || error.message?.includes('timeout') || error.message?.includes('Network Error'))) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * (3 - retries))); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * (3 - retries)));
         return stockAPI.health(retries - 1);
       }
       throw error;
