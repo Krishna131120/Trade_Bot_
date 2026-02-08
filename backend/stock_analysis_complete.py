@@ -1544,10 +1544,13 @@ class FeatureEngineer:
         if stoch is not None:
             df['STOCH_k'] = stoch['STOCHk_14_3_3']
             df['STOCH_d'] = stoch['STOCHd_14_3_3']
-        print("[feat] momentum: WILLR, CCI, MFI, ROC...", flush=True)
+        print("[feat] momentum: WILLR...", flush=True)
         df['WILLR'] = ta.willr(df['High'], df['Low'], df['Close'], length=14)
+        print("[feat] momentum: CCI...", flush=True)
         df['CCI'] = ta.cci(df['High'], df['Low'], df['Close'], length=20)
+        print("[feat] momentum: MFI...", flush=True)
         df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
+        print("[feat] momentum: ROC...", flush=True)
         df['ROC'] = ta.roc(df['Close'], length=12)
         print("[feat] momentum: TRIX, CMO, Aroon, UO...", flush=True)
         trix = ta.trix(df['Close'], length=15)
