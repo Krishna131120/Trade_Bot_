@@ -1525,6 +1525,7 @@ class FeatureEngineer:
     
     def _calculate_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate momentum indicators (14 indicators). Progress logged for debugging slow runs."""
+        fast_features = os.environ.get("FAST_FEATURES", "").strip().lower() in ("1", "true", "yes")
         print("[feat] momentum: RSI...", flush=True)
         df['RSI_14'] = ta.rsi(df['Close'], length=14)
         print("[feat] momentum: MACD...", flush=True)
@@ -1534,10 +1535,17 @@ class FeatureEngineer:
             df['MACD_signal'] = macd['MACDs_12_26_9']
             df['MACD_hist'] = macd['MACDh_12_26_9']
         print("[feat] momentum: Stoch...", flush=True)
-        stoch = ta.stoch(df['High'], df['Low'], df['Close'], k=14, d=3)
-        if stoch is not None:
-            df['STOCH_k'] = stoch['STOCHk_14_3_3']
-            df['STOCH_d'] = stoch['STOCHd_14_3_3']
+        if fast_features:
+            # Fast path: simple pandas Stoch (avoids slow pandas_ta/numba on Render)
+            low_14 = df['Low'].rolling(14).min()
+            high_14 = df['High'].rolling(14).max()
+            df['STOCH_k'] = 100 * (df['Close'] - low_14) / (high_14 - low_14 + 1e-10)
+            df['STOCH_d'] = df['STOCH_k'].rolling(3).mean()
+        else:
+            stoch = ta.stoch(df['High'], df['Low'], df['Close'], k=14, d=3)
+            if stoch is not None:
+                df['STOCH_k'] = stoch['STOCHk_14_3_3']
+                df['STOCH_d'] = stoch['STOCHd_14_3_3']
         print("[feat] momentum: WILLR...", flush=True)
         df['WILLR'] = ta.willr(df['High'], df['Low'], df['Close'], length=14)
         print("[feat] momentum: CCI...", flush=True)
@@ -1545,11 +1553,22 @@ class FeatureEngineer:
         print("[feat] momentum: MFI...", flush=True)
         df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
         print("[feat] momentum: ROC...", flush=True)
-        df['ROC'] = ta.roc(df['Close'], length=12)
+        if fast_features:
+            # Fast path: pandas ROC (avoids hang in ta.roc on Render)
+            df['ROC'] = (df['Close'].pct_change(12) * 100).fillna(0)
+        else:
+            df['ROC'] = ta.roc(df['Close'], length=12)
         print("[feat] momentum: TRIX...", flush=True)
-        trix = ta.trix(df['Close'], length=15)
-        if trix is not None:
-            df['TRIX'] = trix.iloc[:, 0] if isinstance(trix, pd.DataFrame) else trix
+        if fast_features:
+            # Fast path: simple triple-EMA percent change (avoids slow ta.trix on Render)
+            ema1 = df['Close'].ewm(span=15, adjust=False).mean()
+            ema2 = ema1.ewm(span=15, adjust=False).mean()
+            ema3 = ema2.ewm(span=15, adjust=False).mean()
+            df['TRIX'] = (ema3.pct_change() * 100).fillna(0)
+        else:
+            trix = ta.trix(df['Close'], length=15)
+            if trix is not None:
+                df['TRIX'] = trix.iloc[:, 0] if isinstance(trix, pd.DataFrame) else trix
         print("[feat] momentum: CMO...", flush=True)
         df['CMO'] = ta.cmo(df['Close'], length=14)
         print("[feat] momentum: Aroon...", flush=True)
