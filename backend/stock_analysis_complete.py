@@ -1465,37 +1465,43 @@ class FeatureEngineer:
                 # Too little data - can't calculate meaningful indicators
                 return pd.DataFrame()
         
+        # Limit rows for faster feature calc on low-CPU (e.g. Render); keep enough for SMA_200
+        max_rows = int(os.environ.get("FEATURE_MAX_ROWS", "300"))
+        if len(df) > max_rows:
+            n_orig = len(df)
+            df = df.tail(max_rows).copy()
+            logger.info(f"Using last {max_rows} rows for features (was {n_orig})")
         logger.info(f"Calculating features for {symbol} with {len(df)} rows")
-        print(f"[INFO] Calculating 50+ technical indicators for {symbol}...")
+        print(f"[INFO] Calculating 50+ technical indicators for {symbol} ({len(df)} rows)...", flush=True)
         
         # Create a copy to avoid modifying original
         features_df = df.copy()
         
         try:
-            # Calculate features by category
-            print(f"  -> [1/7] Calculating momentum indicators (RSI, MACD, Stochastic, etc.)...")
+            # Calculate features by category (flush so Render logs show where we are)
+            print(f"  -> [1/7] Calculating momentum indicators (RSI, MACD, Stochastic, etc.)...", flush=True)
             features_df = self._calculate_momentum_indicators(features_df)
             
-            print(f"  -> [2/7] Calculating trend indicators (SMA, EMA, ADX, etc.)...")
+            print(f"  -> [2/7] Calculating trend indicators (SMA, EMA, ADX, etc.)...", flush=True)
             features_df = self._calculate_trend_indicators(features_df)
             
-            print(f"  -> [3/7] Calculating volatility indicators (Bollinger Bands, ATR, etc.)...")
+            print(f"  -> [3/7] Calculating volatility indicators (Bollinger Bands, ATR, etc.)...", flush=True)
             features_df = self._calculate_volatility_indicators(features_df)
             
-            print(f"  -> [4/7] Calculating volume indicators (OBV, CMF, etc.)...")
+            print(f"  -> [4/7] Calculating volume indicators (OBV, CMF, etc.)...", flush=True)
             features_df = self._calculate_volume_indicators(features_df)
             
-            print(f"  -> [5/7] Calculating support/resistance levels...")
+            print(f"  -> [5/7] Calculating support/resistance levels...", flush=True)
             features_df = self._calculate_support_resistance(features_df)
             
-            print(f"  -> [6/7] Calculating pattern features (Doji, Hammer, etc.)...")
+            print(f"  -> [6/7] Calculating pattern features (Doji, Hammer, etc.)...", flush=True)
             features_df = self._calculate_pattern_features(features_df)
             
-            print(f"  -> [7/7] Calculating advanced analytics (VWAP, Sharpe, etc.)...")
+            print(f"  -> [7/7] Calculating advanced analytics (VWAP, Sharpe, etc.)...", flush=True)
             features_df = self._calculate_advanced_analytics(features_df)
             
             # Handle NaN values intelligently
-            print(f"  -> Cleaning NaN values...")
+            print(f"  -> Cleaning NaN values...", flush=True)
             
             # Replace infinite values with NaN first (IN-PLACE for performance)
             features_df.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -1524,87 +1530,86 @@ class FeatureEngineer:
             raise
     
     def _calculate_momentum_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate momentum indicators (14 indicators)"""
+        """Calculate momentum indicators (14 indicators). Progress logged for debugging slow runs."""
+        print("[feat] momentum: RSI...", flush=True)
         df['RSI_14'] = ta.rsi(df['Close'], length=14)
-        
+        print("[feat] momentum: MACD...", flush=True)
         macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
         if macd is not None:
             df['MACD'] = macd['MACD_12_26_9']
             df['MACD_signal'] = macd['MACDs_12_26_9']
             df['MACD_hist'] = macd['MACDh_12_26_9']
-        
+        print("[feat] momentum: Stoch...", flush=True)
         stoch = ta.stoch(df['High'], df['Low'], df['Close'], k=14, d=3)
         if stoch is not None:
             df['STOCH_k'] = stoch['STOCHk_14_3_3']
             df['STOCH_d'] = stoch['STOCHd_14_3_3']
-        
+        print("[feat] momentum: WILLR, CCI, MFI, ROC...", flush=True)
         df['WILLR'] = ta.willr(df['High'], df['Low'], df['Close'], length=14)
         df['CCI'] = ta.cci(df['High'], df['Low'], df['Close'], length=20)
         df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
         df['ROC'] = ta.roc(df['Close'], length=12)
-        
+        print("[feat] momentum: TRIX, CMO, Aroon, UO...", flush=True)
         trix = ta.trix(df['Close'], length=15)
         if trix is not None:
             df['TRIX'] = trix.iloc[:, 0] if isinstance(trix, pd.DataFrame) else trix
-        
         df['CMO'] = ta.cmo(df['Close'], length=14)
-        
         aroon = ta.aroon(df['High'], df['Low'], length=25)
         if aroon is not None:
             df['AROON_up'] = aroon['AROONU_25']
             df['AROON_down'] = aroon['AROOND_25']
             df['AROON_osc'] = df['AROON_up'] - df['AROON_down']
-        
         df['UO'] = ta.uo(df['High'], df['Low'], df['Close'])
+        print("[feat] momentum: done", flush=True)
         return df
     
     def _calculate_trend_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate trend indicators (11+ indicators)"""
+        print("[feat] trend: SMA, EMA...", flush=True)
         df['SMA_10'] = ta.sma(df['Close'], length=10)
         df['SMA_20'] = ta.sma(df['Close'], length=20)
         df['SMA_50'] = ta.sma(df['Close'], length=50)
         df['SMA_200'] = ta.sma(df['Close'], length=200)
         df['EMA_12'] = ta.ema(df['Close'], length=12)
         df['EMA_26'] = ta.ema(df['Close'], length=26)
-        
+        print("[feat] trend: ADX...", flush=True)
         adx = ta.adx(df['High'], df['Low'], df['Close'], length=14)
         if adx is not None:
             df['ADX'] = adx['ADX_14']
             df['DMP'] = adx['DMP_14']
             df['DMN'] = adx['DMN_14']
-        
+        print("[feat] trend: PSAR...", flush=True)
         psar = ta.psar(df['High'], df['Low'], df['Close'])
         if psar is not None:
             psar_long = psar.iloc[:, 0] if isinstance(psar, pd.DataFrame) else psar
             psar_short = psar.iloc[:, 1] if isinstance(psar, pd.DataFrame) and psar.shape[1] > 1 else None
             df['PSAR'] = psar_long.fillna(psar_short) if psar_short is not None else psar_long
-        
+        print("[feat] trend: KC, Donchian, alignment...", flush=True)
         kc = ta.kc(df['High'], df['Low'], df['Close'], length=20)
         if kc is not None:
             df['KC_upper'] = kc['KCUe_20_2']
             df['KC_middle'] = kc['KCBe_20_2']
             df['KC_lower'] = kc['KCLe_20_2']
-        
         dc = ta.donchian(df['High'], df['Low'], lower_length=20, upper_length=20)
         if dc is not None:
             df['DC_upper'] = dc['DCU_20_20']
             df['DC_middle'] = dc['DCM_20_20']
             df['DC_lower'] = dc['DCL_20_20']
-        
         df['MA_alignment'] = (
             (df['SMA_10'] > df['SMA_20']).astype(int) +
             (df['SMA_20'] > df['SMA_50']).astype(int) +
             (df['SMA_50'] > df['SMA_200']).astype(int)
         ) / 3.0
-        
         df['trend_direction'] = np.where(
             df['Close'] > df['SMA_50'], 1,
             np.where(df['Close'] < df['SMA_50'], -1, 0)
         )
+        print("[feat] trend: done", flush=True)
         return df
     
     def _calculate_volatility_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate volatility indicators (5+ indicators)"""
+        print("[feat] volatility: BB, ATR, STD...", flush=True)
         bbands = ta.bbands(df['Close'], length=20, std=2)
         if bbands is not None:
             cols = bbands.columns.tolist()
@@ -1616,15 +1621,16 @@ class FeatureEngineer:
                     df['BB_width'] = bbands.iloc[:, 3]
                 if len(cols) >= 5:
                     df['BB_pct'] = bbands.iloc[:, 4]
-        
         df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
         df['STD_20'] = df['Close'].rolling(window=20).std()
         returns = df['Close'].pct_change()
         df['volatility_20'] = returns.rolling(window=20).std() * np.sqrt(252)
+        print("[feat] volatility: done", flush=True)
         return df
     
     def _calculate_volume_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate volume indicators (7+ indicators)"""
+        print("[feat] volume: OBV, AD, CMF, VROC, EMV...", flush=True)
         df['OBV'] = ta.obv(df['Close'], df['Volume'])
         df['Volume_SMA_20'] = ta.sma(df['Volume'], length=20)
         df['AD'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume'])
@@ -1633,42 +1639,43 @@ class FeatureEngineer:
         df['EMV'] = ta.eom(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
         df['volume_ratio'] = df['Volume'] / (df['Volume_SMA_20'] + 1e-10)
         df['volume_trend'] = np.where(df['Volume'] > df['Volume_SMA_20'], 1, -1)
+        print("[feat] volume: done", flush=True)
         return df
     
     def _calculate_support_resistance(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate support/resistance levels (5+ indicators)"""
+        print("[feat] support_resistance: pivot, fib...", flush=True)
         df['pivot'] = (df['High'] + df['Low'] + df['Close']) / 3
         df['pivot_r1'] = 2 * df['pivot'] - df['Low']
         df['pivot_s1'] = 2 * df['pivot'] - df['High']
         df['pivot_r2'] = df['pivot'] + (df['High'] - df['Low'])
         df['pivot_s2'] = df['pivot'] - (df['High'] - df['Low'])
-        
         window = 50
         rolling_high = df['High'].rolling(window=window).max()
         rolling_low = df['Low'].rolling(window=window).min()
         diff = rolling_high - rolling_low
-        
         df['fib_0.236'] = rolling_high - 0.236 * diff
         df['fib_0.382'] = rolling_high - 0.382 * diff
         df['fib_0.500'] = rolling_high - 0.500 * diff
         df['fib_0.618'] = rolling_high - 0.618 * diff
         df['price_position'] = (df['Close'] - rolling_low) / (diff + 1e-10)
+        print("[feat] support_resistance: done", flush=True)
         return df
     
     def _calculate_pattern_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate pattern recognition features (5+ features)"""
+        print("[feat] pattern: doji, hammer...", flush=True)
         doji = ta.cdl_doji(df['Open'], df['High'], df['Low'], df['Close'])
         if doji is not None:
             df['CDL_DOJI'] = doji.iloc[:, 0].fillna(0).astype(int) if isinstance(doji, pd.DataFrame) else doji.fillna(0).astype(int)
         else:
             df['CDL_DOJI'] = 0
-        
         hammer = ta.cdl_pattern(df['Open'], df['High'], df['Low'], df['Close'], name='hammer')
         if hammer is not None:
             df['CDL_HAMMER'] = hammer.iloc[:, 0].fillna(0).astype(int) if isinstance(hammer, pd.DataFrame) else hammer.fillna(0).astype(int)
         else:
             df['CDL_HAMMER'] = 0
-        
+        print("[feat] pattern: HH/LL, gaps, engulf...", flush=True)
         df['higher_high'] = (df['High'] > df['High'].shift(1)).astype(int)
         df['lower_low'] = (df['Low'] < df['Low'].shift(1)).astype(int)
         df['gap_up'] = (df['Low'] > df['High'].shift(1)).astype(int)
@@ -1683,14 +1690,15 @@ class FeatureEngineer:
             (df['Open'] > df['Close'].shift(1)) &
             (df['Close'] < df['Open'].shift(1))
         ).astype(int)
+        print("[feat] pattern: done", flush=True)
         return df
     
     def _calculate_advanced_analytics(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate advanced analytics (8+ features)"""
+        print("[feat] advanced: price_to_sma, divergence, VWAP...", flush=True)
         df['price_to_sma_10'] = df['Close'] / (df['SMA_10'] + 1e-10)
         df['price_to_sma_50'] = df['Close'] / (df['SMA_50'] + 1e-10)
         df['price_to_sma_200'] = df['Close'] / (df['SMA_200'] + 1e-10)
-        
         price_trend = (df['Close'] - df['Close'].shift(5)) > 0
         rsi_trend = (df['RSI_14'] - df['RSI_14'].shift(5)) > 0
         df['rsi_divergence'] = (price_trend != rsi_trend).astype(int)
@@ -1699,6 +1707,7 @@ class FeatureEngineer:
         df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
         df['daily_return'] = df['Close'].pct_change()
         df['daily_return_ma_5'] = df['daily_return'].rolling(window=5).mean()
+        print("[feat] advanced: sharpe, autocorr...", flush=True)
         returns = df['daily_return']
         df['sharpe_20'] = (
             returns.rolling(window=20).mean() /
@@ -1707,6 +1716,7 @@ class FeatureEngineer:
         df['returns_autocorr'] = returns.rolling(window=20).apply(
             lambda x: x.autocorr(), raw=False
         )
+        print("[feat] advanced: done", flush=True)
         return df
     
     def save_features(self, df: pd.DataFrame, symbol: str):
