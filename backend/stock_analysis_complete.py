@@ -3859,9 +3859,11 @@ def train_ml_models(symbol: str, horizon: str = "intraday", verbose: bool = True
         print(f"   Expected input shape: (batch_size, {len(feature_cols)})")
         print(f"   Feature columns saved: {len(feature_cols)} (will be used in prediction)")
     
-    # Train DQN with the properly prepared features
-    print("[train] DQN: train (episodes)...", flush=True)
-    dqn_metrics = dqn_agent.train(dqn_features_df, returns_series, n_episodes=len(dqn_features_df))
+    # Train DQN with the properly prepared features (cap episodes on Render to avoid timeout/restart)
+    _dqn_ep = os.environ.get("DQN_EPISODES", "").strip()
+    n_episodes = min(int(_dqn_ep), len(dqn_features_df)) if _dqn_ep.isdigit() else len(dqn_features_df)
+    print(f"[train] DQN: train (episodes={n_episodes})...", flush=True)
+    dqn_metrics = dqn_agent.train(dqn_features_df, returns_series, n_episodes=n_episodes)
     print("[train] DQN: train done", flush=True)
     
     if verbose:
