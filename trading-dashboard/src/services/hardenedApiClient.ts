@@ -1,7 +1,7 @@
 import axios, { AxiosResponse } from 'axios';
 import { validatePredictResponse, detectContractDrift, type StrictPredictResponse, type ContractDriftError } from '../validators/contractValidator';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_BACKEND_URL || 'https://trade-bot-api.onrender.com';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_BACKEND_URL || 'http://127.0.0.1:8000';
 
 // FAILURE MODES - MUTUALLY EXCLUSIVE
 export type FailureMode =
@@ -33,7 +33,7 @@ function logIntegration(endpoint: string, response: any, validation: any, drift:
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000,
+  timeout: 480000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -49,94 +49,92 @@ export const hardenedAPI = {
 
       // STRICT VALIDATION - NO OPTIONAL CHAINING
       const validation = validatePredictResponse(response.data);
-      const drift = detectContractDrift(response.data);
-      
-      logIntegration('predict', response.data, validation, drift);
+      const drift = detectContractDrift(response.data, validation);
 
+      logIntegration('POST /tools/predict', response.data, validation, drift);
+
+      // CONTRACT DRIFT DETECTION
+      if (drift) {
+        return {
+          success: false,
+          failureMode: 'contract_drift',
+          error: 'Backend response does not match expected contract',
+          contractDrift: drift,
+          rawResponse: response.data
+        };
+      }
+
+      // VALIDATION FAILURE
       if (!validation.valid) {
         return {
           success: false,
           failureMode: 'invalid_data',
-          error: validation.error,
-          rawResponse: response.data,
-        };
-      }
-
-      if (drift.hasDrift) {
-        return {
-          success: false,
-          failureMode: 'contract_drift',
-          error: `Contract drift detected: ${drift.errors?.join(', ')}`,
-          contractDrift: drift,
-          rawResponse: response.data,
-        };
-      }
-
-      // Check for trust gate
-      const hasTrustGate = response.data.predictions?.some(
-        (p: any) => p.trust_gate_active === true
-      );
-
-      if (hasTrustGate) {
-        return {
-          success: false,
-          failureMode: 'trust_gate_active',
-          error: 'Trust gate is active - predictions blocked',
-          rawResponse: response.data,
+          error: `Response validation failed: ${validation.errors.join(', ')}`,
+          rawResponse: response.data
         };
       }
 
       return {
         success: true,
         data: response.data as StrictPredictResponse,
+        rawResponse: response.data
       };
 
     } catch (error: any) {
-      if (error.response) {
+      // BACKEND UNAVAILABLE
+      if (!error.response) {
         return {
           success: false,
-          failureMode: 'backend_error_response',
-          error: error.response.data?.detail || error.response.data?.error || 'Backend error',
-          rawResponse: error.response.data,
+          failureMode: 'backend_unavailable',
+          error: 'Backend server is not reachable'
         };
       }
 
+      // BACKEND ERROR RESPONSE
       return {
         success: false,
-        failureMode: 'backend_unavailable',
-        error: 'Cannot connect to backend',
+        failureMode: 'backend_error_response',
+        error: error.response?.data?.detail || error.message || 'Backend returned error'
       };
     }
   },
 
-  async fetchData(symbols: string[]): Promise<HardenedApiResult<FetchDataResponse>> {
+  async health(): Promise<HardenedApiResult<{ status: string }>> {
     try {
-      const response: AxiosResponse = await apiClient.post('/tools/fetch_data', {
-        symbols,
-      });
+      const response: AxiosResponse = await apiClient.get('/tools/health');
+
+      // STRICT VALIDATION
+      if (!response.data || typeof response.data.status !== 'string') {
+        return {
+          success: false,
+          failureMode: 'invalid_data',
+          error: 'Health response validation failed',
+          rawResponse: response.data
+        };
+      }
+
+      logIntegration('GET /tools/health', response.data, { valid: true }, null);
 
       return {
         success: true,
-        data: response.data as FetchDataResponse,
+        data: response.data,
+        rawResponse: response.data
       };
 
     } catch (error: any) {
-      if (error.response) {
+      if (!error.response) {
         return {
           success: false,
-          failureMode: 'backend_error_response',
-          error: error.response.data?.detail || error.response.data?.error || 'Backend error',
+          failureMode: 'backend_unavailable',
+          error: 'Backend server is not reachable'
         };
       }
 
       return {
         success: false,
-        failureMode: 'backend_unavailable',
-        error: 'Cannot connect to backend',
+        failureMode: 'backend_error_response',
+        error: error.response?.data?.detail || error.message || 'Health check failed'
       };
     }
-  },
+  }
 };
-
-export { API_BASE_URL };
-export type { PredictResponse, PredictionResult, FetchDataResponse, FetchDataResult, DataStatus };

@@ -6,7 +6,6 @@ Provides tool-style interfaces for stock prediction system
 import json
 import time
 import logging
-import gc
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pathlib import Path
@@ -117,9 +116,6 @@ class MCPAdapter:
                 logger.error(f"Failed to log response even with default=str: {e2}")
         
         logger.info(f"MCP Response [{request_id}]: {duration_ms:.2f}ms")
-        
-        # Aggressive garbage collection after every request to prevent memory leaks on Render
-        gc.collect()
     
     def predict(
         self,
@@ -163,10 +159,10 @@ class MCPAdapter:
                     json_path = DATA_CACHE_DIR / f"{symbol}_all_data.json"
                     
                     if not json_path.exists():
-                        print(f"[STEP 1/4] Data not found for {symbol}. Fetching from Yahoo Finance...", flush=True)
+                        print(f"[STEP 1/4] Data not found for {symbol}. Fetching price data (fast path)...", flush=True)
                         logger.info(f"[{request_id}] Data not found for {symbol}. Fetching...")
                         try:
-                            self.ingester.fetch_all_data(symbol, period="2y")
+                            self.ingester.fetch_price_only(symbol, period="2y")
                             print(f"[STEP 1/4] [OK] Data fetched successfully!\n", flush=True)
                             logger.info(f"[{request_id}] Data fetched for {symbol}")
                         except Exception as e:
@@ -186,12 +182,18 @@ class MCPAdapter:
                     if not features_path.exists():
                         print(f"[STEP 2/4] Features not found. Calculating 50+ technical indicators...", flush=True)
                         logger.info(f"[{request_id}] Features not found for {symbol}. Calculating...")
+                        print("[pipe] load_all_data...", flush=True)
                         all_data = self.ingester.load_all_data(symbol)
+                        print("[pipe] load_all_data done", flush=True)
                         if all_data:
                             df = all_data.get('price_history')
                             if df is not None and not df.empty:
+                                print("[pipe] calculate_all_features...", flush=True)
                                 features_df = self.engineer.calculate_all_features(df, symbol)
+                                print("[pipe] calculate_all_features done", flush=True)
+                                print("[pipe] save_features...", flush=True)
                                 self.engineer.save_features(features_df, symbol)
+                                print("[pipe] save_features done", flush=True)
                                 print(f"[STEP 2/4] [OK] Features calculated successfully!\n", flush=True)
                                 logger.info(f"[{request_id}] Features calculated for {symbol}")
                     
@@ -206,8 +208,10 @@ class MCPAdapter:
                         print(f"            This will take 60-90 seconds...\n", flush=True)
                         logger.info(f"[{request_id}] Models not found for {symbol} ({horizon}). Training...")
                         try:
+                            print("[pipe] train_ml_models...", flush=True)
                             from stock_analysis_complete import train_ml_models
                             training_result = train_ml_models(symbol, horizon, verbose=True)
+                            print("[pipe] train_ml_models done", flush=True)
                             
                             # Handle both dict and bool return formats
                             success = training_result.get('success', False) if isinstance(training_result, dict) else training_result
@@ -237,7 +241,9 @@ class MCPAdapter:
                     
                     # STEP 4: Get prediction
                     print(f"[STEP 4/4] Generating prediction using ensemble of 4 models...", flush=True)
+                    print("[pipe] predict_stock_price...", flush=True)
                     prediction = predict_stock_price(symbol, horizon=horizon, verbose=True)
+                    print("[pipe] predict_stock_price done", flush=True)
                     print(f"[STEP 4/4] [OK] Prediction generated!\n", flush=True)
                     
                     if prediction:
@@ -368,10 +374,10 @@ class MCPAdapter:
                     json_path = DATA_CACHE_DIR / f"{symbol}_all_data.json"
                     
                     if not json_path.exists():
-                        print(f"[STEP 1/4] Fetching data from Yahoo Finance...", flush=True)
+                        print(f"[STEP 1/4] Fetching price data (fast path)...", flush=True)
                         logger.info(f"[{request_id}] Data not found for {symbol}. Fetching...")
                         try:
-                            self.ingester.fetch_all_data(symbol, period="2y")
+                            self.ingester.fetch_price_only(symbol, period="2y")
                             print(f"[STEP 1/4] [OK] Data fetched!\n", flush=True)
                             logger.info(f"[{request_id}] Data fetched for {symbol}")
                         except Exception as e:
@@ -527,7 +533,7 @@ class MCPAdapter:
                 print(f"\n[ANALYZE] Fetching data for {symbol}...", flush=True)
                 logger.info(f"[{request_id}] Data not found for {symbol}. Fetching...")
                 try:
-                    self.ingester.fetch_all_data(symbol, period="2y")
+                    self.ingester.fetch_price_only(symbol, period="2y")
                     print(f"[ANALYZE] [OK] Data fetched!\n", flush=True)
                 except Exception as e:
                     print(f"[ANALYZE] [FAIL] Data fetch failed: {e}\n", flush=True)
@@ -739,9 +745,9 @@ class MCPAdapter:
             json_path = DATA_CACHE_DIR / f"{symbol}_all_data.json"
             
             if not json_path.exists():
-                logger.info(f"[{request_id}] Data not found. Fetching from Yahoo Finance...")
+                logger.info(f"[{request_id}] Data not found. Fetching price data (fast path)...")
                 try:
-                    self.ingester.fetch_all_data(symbol, period="2y")
+                    self.ingester.fetch_price_only(symbol, period="2y")
                     logger.info(f"[{request_id}] Data fetched successfully")
                 except Exception as e:
                     logger.error(f"[{request_id}] Data fetch failed: {e}")
@@ -770,8 +776,7 @@ class MCPAdapter:
             
             # STEP 3: Train all models (includes DQN)
             logger.info(f"[{request_id}] Starting training for horizon: {horizon}")
-            from stock_analysis_complete import train_ml_models
-            from core.dqn_agent import DQNTradingAgent
+            from stock_analysis_complete import train_ml_models, DQNTradingAgent
             
             training_result = train_ml_models(symbol, horizon, verbose=True)
             
@@ -799,7 +804,7 @@ class MCPAdapter:
             if not metrics:
                 logger.info(f"[{request_id}] Metrics not in training result, loading agent...")
                 try:
-                    from core.dqn_agent import DQNTradingAgent
+                    from stock_analysis_complete import DQNTradingAgent
                     dqn_agent = DQNTradingAgent(n_features=1)  # Will be updated when loading
                     dqn_agent.load(symbol, horizon)
                     metrics = dqn_agent._calculate_performance_metrics()

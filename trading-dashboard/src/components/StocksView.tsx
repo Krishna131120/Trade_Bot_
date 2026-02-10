@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, TrendingUp, TrendingDown, Sparkles, Loader2, BarChart3, Newspaper, Zap } from 'lucide-react';
-import { POPULAR_STOCKS } from '../services/api';
+import { Search, TrendingUp, TrendingDown, Loader2, BarChart3, Newspaper, Zap, Sparkles } from 'lucide-react';
 import { formatUSDToINR } from '../utils/currencyConverter';
 import SymbolAutocomplete from './SymbolAutocomplete';
 import { useTheme } from '../contexts/ThemeContext';
@@ -41,12 +40,6 @@ const StocksView = ({
   
   // Request lock to prevent duplicate calls
   const [isRequestInProgress, setIsRequestInProgress] = useState(false);
-  
-  // Near-Live mode state
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(60); // seconds
-  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
-  const [nextRefreshIn, setNextRefreshIn] = useState<number | null>(null);
 
   // Sync external search query to internal state
   useEffect(() => {
@@ -55,67 +48,15 @@ const StocksView = ({
     }
   }, [externalSearchQuery]);
   
-  // Auto-refresh loop
-  useEffect(() => {
-    if (!autoRefreshEnabled || !searchQuery || isRequestInProgress) {
-      setNextRefreshIn(null);
-      return;
-    }
-    
-    // Countdown timer
-    const countdownInterval = setInterval(() => {
-      if (lastRefreshTime) {
-        const elapsed = Math.floor((Date.now() - lastRefreshTime.getTime()) / 1000);
-        const remaining = Math.max(0, refreshInterval - elapsed);
-        setNextRefreshIn(remaining);
-      }
-    }, 1000);
-    
-    // Auto-refresh timer
-    const refreshTimer = setInterval(() => {
-      if (!document.hidden && !isRequestInProgress) {
-        console.log('[AUTO-REFRESH] Triggering snapshot update');
-        handlePredict(searchQuery, true, true);
-      }
-    }, refreshInterval * 1000);
-    
-    return () => {
-      clearInterval(countdownInterval);
-      clearInterval(refreshTimer);
-    };
-  }, [autoRefreshEnabled, searchQuery, refreshInterval, isRequestInProgress, lastRefreshTime]);
-  
-  // Pause auto-refresh when tab is hidden
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden && autoRefreshEnabled) {
-        console.log('[AUTO-REFRESH] Paused (tab hidden)');
-      } else if (!document.hidden && autoRefreshEnabled) {
-        console.log('[AUTO-REFRESH] Resumed (tab visible)');
-      }
-    };
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [autoRefreshEnabled]);
-  
-  // Combined search execution with request lock
+  // Manual search execution only - no auto-refresh
   const handlePredict = async (symbol: string, userInitiated: boolean = true, forceRefresh: boolean = false) => {
     if (!symbol || isRequestInProgress) return;
     
     setIsRequestInProgress(true);
     try {
       await onSearch(symbol, userInitiated, forceRefresh);
-      
-      // Update last refresh time
-      setLastRefreshTime(new Date());
     } catch (err) {
-      console.error('[AUTO-REFRESH] Error during refresh:', err);
-      // Stop auto-refresh on error
-      if (autoRefreshEnabled) {
-        setAutoRefreshEnabled(false);
-        console.log('[AUTO-REFRESH] Stopped due to error');
-      }
+      console.error('[Search] Error:', err);
     } finally {
       setIsRequestInProgress(false);
     }
@@ -132,71 +73,11 @@ const StocksView = ({
             isLight ? 'text-blue-600' : isSpace ? 'text-blue-400 drop-shadow' : 'text-blue-400'
           }`} />
           Stocks Market
-          {autoRefreshEnabled && (
-            <span className={`text-xs px-2 py-1 rounded-lg font-semibold ${
-              isLight ? 'bg-green-100 text-green-700' : 'bg-green-500/20 text-green-400'
-            }`}>
-              Near-Live (Snapshot)
-            </span>
-          )}
         </h2>
         <p className={`${
           isLight ? 'text-gray-600' : isSpace ? 'text-gray-300' : 'text-gray-400'
         } text-xs`}>Search and analyze stocks with AI-powered predictions</p>
       </div>
-
-      {/* Near-Live Mode Controls */}
-      {searchQuery && predictions.length > 0 && (
-        <div className={`p-3 rounded-lg border ${
-          isLight ? 'bg-blue-50 border-blue-300' : 'bg-blue-500/10 border-blue-500/30'
-        }`}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoRefreshEnabled}
-                  onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
-                  className="w-4 h-4"
-                />
-                <span className={`text-sm font-semibold ${
-                  isLight ? 'text-blue-700' : 'text-blue-300'
-                }`}>Near-Live Mode</span>
-              </label>
-              <select
-                value={refreshInterval}
-                onChange={(e) => setRefreshInterval(Number(e.target.value))}
-                disabled={!autoRefreshEnabled}
-                className={`px-2 py-1 text-xs rounded ${
-                  isLight ? 'bg-white border-blue-300' : 'bg-slate-700 border-blue-500/50'
-                } border disabled:opacity-50`}
-              >
-                <option value={30}>30s</option>
-                <option value={60}>60s</option>
-                <option value={120}>2min</option>
-                <option value={300}>5min</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-3">
-              {lastRefreshTime && (
-                <span className={`text-xs ${
-                  isLight ? 'text-blue-600' : 'text-blue-400'
-                }`}>
-                  Last: {lastRefreshTime.toLocaleTimeString()}
-                  {autoRefreshEnabled && nextRefreshIn !== null && (
-                    <span className="ml-2">• Next: {nextRefreshIn}s</span>
-                  )}
-                </span>
-              )}
-            </div>
-          </div>
-          <p className={`text-xs mt-2 ${
-            isLight ? 'text-blue-600' : 'text-blue-300'
-          }`}>
-            Updates every {refreshInterval}s using latest available market snapshot. Not tick-by-tick live price.
-          </p>
-        </div>
-      )}
 
       <div className={`${
         isLight 
@@ -356,43 +237,6 @@ const StocksView = ({
           )}
         </div>
 
-        <div>
-          <p className={`${
-            isLight ? 'text-gray-700' : isSpace ? 'text-gray-300' : 'text-gray-300'
-          } mb-3 font-medium flex items-center gap-2`}>
-            <Sparkles className={`w-4 h-4 ${
-              isLight ? 'text-blue-500' : isSpace ? 'text-blue-400 drop-shadow' : 'text-blue-400'
-            }`} />
-            Popular Stocks:
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {POPULAR_STOCKS.slice(0, 20).map((symbol) => (
-              <button
-                key={symbol}
-                onClick={() => {
-                  if (!isRequestInProgress) {
-                    if (import.meta.env.DEV) {
-                      console.log(`[TAB] Clicked: ${symbol}`);
-                      console.log(`[API] /tools/predict will be called for ${symbol}`);
-                    }
-                    setSearchQuery(symbol);
-                    handlePredict(symbol, true, false);
-                  }
-                }}
-                disabled={isRequestInProgress}
-                className={`px-3 py-1.5 ${
-                  isLight 
-                    ? 'bg-gray-200/50 text-gray-700 hover:bg-blue-500 hover:text-white' 
-                    : isSpace
-                      ? 'bg-slate-800/50 text-gray-300 hover:bg-white/10 hover:text-white drop-shadow'
-                      : 'bg-slate-700/50 text-gray-300 hover:bg-blue-500 hover:text-white'
-                } rounded-lg text-sm font-medium transition-all hover:scale-105`}
-              >
-                {symbol.replace('.NS', '')}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
       {error && (

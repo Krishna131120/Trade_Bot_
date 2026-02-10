@@ -34,7 +34,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 120000, // 120 seconds (2 minutes) - predictions can take 60-90 seconds on first run
+  timeout: 480000, // 8 minutes - first run on Render can take 4–6 min (fetch + features + model)
   withCredentials: false, // CORS is handled by backend
 });
 
@@ -254,13 +254,30 @@ export const stockAPI = {
       if (capitalRiskPct !== undefined) payload.capital_risk_pct = capitalRiskPct;
       if (drawdownLimitPct !== undefined) payload.drawdown_limit_pct = drawdownLimitPct;
 
-      log('Calling /tools/predict with:', payload);
+      log('Calling /tools/predict (async + poll)...', payload);
       try {
-      const response = await api.post('/tools/predict', payload);
-      log('Predict response received:', { status: response.status, hasPredictions: 'predictions' in response.data });
+      // Use async endpoint: start job then poll (no long-held request = no timeout)
+      const startResp = await api.post('/tools/predict/async', payload, { timeout: 60000 });
+      const jobId = startResp.data?.job_id;
+      if (!jobId) throw new Error('Backend did not return job_id');
+      log('Predict job started:', jobId);
+      let responseData: any = null;
+      const pollIntervalMs = 12000;
+      const pollTimeoutMs = 45000;
+      const maxPolls = 150; // ~30 min
+      for (let i = 0; i < maxPolls; i++) {
+        const pollResp = await api.get(`/tools/predict/result/${jobId}`, { timeout: pollTimeoutMs });
+        if (pollResp.status === 404) throw new Error('Prediction job expired or not found');
+        if (pollResp.status === 200) {
+          responseData = pollResp.data;
+          if (responseData?.status === 'failed') throw new Error(responseData?.error || 'Prediction failed');
+          break;
+        }
+        await new Promise(r => setTimeout(r, pollIntervalMs));
+      }
+      if (!responseData) throw new Error('Prediction timed out (backend did not finish in time)');
+      log('Predict response received:', { hasPredictions: 'predictions' in responseData });
 
-      const responseData = response.data;
-      
       // Validate API response for data integrity
       const apiValidation = validateApiResponse(responseData);
 
@@ -292,7 +309,7 @@ export const stockAPI = {
             const marketDataValidation = marketDataValidator.validatePriceData({
               symbol: prediction.symbol,
               price: prediction.current_price,
-              timestamp: prediction.price_metadata?.price_timestamp || response.data.metadata?.timestamp,
+              timestamp: prediction.price_metadata?.price_timestamp || responseData?.metadata?.timestamp,
               source: prediction.price_metadata?.price_source || 'api_response',
               metadata: prediction.price_metadata
             });
@@ -490,13 +507,13 @@ export const stockAPI = {
   health: async (retries: number = 2): Promise<any> => {
     try {
       const response = await api.get('/tools/health', {
-        timeout: 15000, // 15 seconds for health check
+        timeout: 25000, // 25s — backend may be busy with prediction
       });
       return response.data;
     } catch (error: any) {
       // Retry on timeout or connection errors
       if (retries > 0 && (error.code === 'ECONNABORTED' || error.message?.includes('timeout') || error.message?.includes('Network Error'))) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * (3 - retries))); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * (3 - retries)));
         return stockAPI.health(retries - 1);
       }
       throw error;
@@ -535,7 +552,11 @@ export const stockAPI = {
         return { connected: true, data: error.response.data };
       }
 
-      isBackendOnline = false;
+      // Don't mark offline on timeout — backend may be busy with a long prediction
+      const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+      if (!isTimeout) {
+        isBackendOnline = false;
+      }
       connectionCheckInProgress = false;
 
       const errorMessage = error.code === 'ECONNREFUSED'
@@ -544,7 +565,7 @@ export const stockAPI = {
           ? 'Backend server is not responding. It may be starting up or overloaded.'
           : error.message || 'Unable to connect to backend server';
 
-      return { connected: false, error: errorMessage };
+      return { connected: isBackendOnline, error: errorMessage };
     }
   },
 

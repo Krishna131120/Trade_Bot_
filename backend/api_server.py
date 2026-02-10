@@ -24,6 +24,9 @@ from pathlib import Path
 from datetime import datetime
 import json
 import psutil
+import threading
+import uuid
+import time
 
 from core.mcp_adapter import MCPAdapter
 # JWT authentication removed - open access API
@@ -36,19 +39,6 @@ import config
 from config import LOGS_DIR
 from live_price_validator import LivePriceValidator
 
-# Memory logging utility
-def log_memory_usage(label: str = ""):
-    """Log current memory usage"""
-    try:
-        process = psutil.Process()
-        mem_mb = process.memory_info().rss / 1024 / 1024
-        print(f"[MEMORY] {label}: {mem_mb:.1f} MB")
-        logger.info(f"Memory usage {label}: {mem_mb:.1f} MB")
-        return mem_mb
-    except Exception as e:
-        logger.warning(f"Could not log memory: {e}")
-        return 0
-
 # Initialize FastAPI app
 app = FastAPI(
     title=config.API_TITLE,
@@ -58,30 +48,36 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS middleware - read origins from environment or use defaults
-import os
-cors_origins_env = os.getenv('CORS_ORIGINS', '')
-if cors_origins_env:
-    # Split by comma if multiple origins provided
-    allow_origins = [origin.strip() for origin in cors_origins_env.split(',')]
+# CORS middleware
+# Build CORS origins list
+if config.CORS_ALLOW_ALL:
+    # Allow all origins (useful for debugging)
+    cors_origins = ["*"]
+    allow_credentials = False  # Cannot use credentials with wildcard
+    logger.warning("CORS: Allowing all origins (CORS_ALLOW_ALL=true)")
 else:
-    allow_origins = [
+    cors_origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:5000",
-        "http://127.0.0.1:5000",
+        "https://trade-bot-frontend-halb.onrender.com",
+        "https://trade-bot-dashboard-llb8.onrender.com",
         "https://trade-bot-dashboard-c9x3.onrender.com",
-        "https://trade-bot-frontend-halb.onrender.com"
+        "https://trade-bot-api.onrender.com",
+        *config.CORS_ORIGINS_EXTRA,
     ]
+    # Remove duplicates while preserving order
+    cors_origins = list(dict.fromkeys(cors_origins))
+    allow_credentials = True
+    logger.info(f"CORS: Allowing origins: {cors_origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight for 1 hour
 )
 
 # Logging setup with automatic rotation
@@ -116,6 +112,41 @@ price_validator = LivePriceValidator()
 # API request logging
 API_LOG_PATH = Path("data/logs/api_requests.jsonl")
 SECURITY_LOG_PATH = Path("data/logs/security.jsonl")
+
+# Async predict: in-memory job store (job_id -> { status, result?, error?, created_at })
+_predict_jobs: Dict[str, Dict[str, Any]] = {}
+_predict_jobs_lock = threading.Lock()
+JOB_EXPIRE_SECONDS = 3600  # 1 hour
+
+
+def _run_predict_job(job_id: str, data: dict) -> None:
+    try:
+        with _predict_jobs_lock:
+            _predict_jobs[job_id]["status"] = "running"
+        result = mcp_adapter.predict(
+            symbols=data["symbols"],
+            horizon=data["horizon"],
+            risk_profile=data.get("risk_profile"),
+            stop_loss_pct=data.get("stop_loss_pct"),
+            capital_risk_pct=data.get("capital_risk_pct"),
+            drawdown_limit_pct=data.get("drawdown_limit_pct"),
+        )
+        with _predict_jobs_lock:
+            _predict_jobs[job_id]["status"] = "completed"
+            _predict_jobs[job_id]["result"] = result
+    except Exception as e:
+        logger.exception(f"Async predict job {job_id} failed")
+        with _predict_jobs_lock:
+            _predict_jobs[job_id]["status"] = "failed"
+            _predict_jobs[job_id]["error"] = str(e)
+
+
+def _prune_old_jobs() -> None:
+    now = time.time()
+    with _predict_jobs_lock:
+        expired = [jid for jid, j in _predict_jobs.items() if (now - j.get("created_at", 0)) > JOB_EXPIRE_SECONDS]
+        for jid in expired:
+            del _predict_jobs[jid]
 
 
 # ==================== Pydantic Models ====================
@@ -370,6 +401,8 @@ async def index():
             '/auth/status': 'GET - Check rate limit status',
             '/tools/health': 'GET - System health',
             '/tools/predict': 'POST - Generate predictions (NO AUTH)',
+            '/tools/predict/async': 'POST - Start prediction, returns job_id; poll /tools/predict/result/{job_id}',
+            '/tools/predict/result/{job_id}': 'GET - Get async prediction result (202=running, 200=done)',
             '/tools/scan_all': 'POST - Scan and rank symbols (NO AUTH)',
             '/tools/analyze': 'POST - Analyze with risk parameters (NO AUTH)',
             '/tools/feedback': 'POST - Provide feedback (NO AUTH)',
@@ -443,9 +476,6 @@ async def predict(
 ):
     """Generate predictions for symbols (NO AUTH REQUIRED)"""
     try:
-        # Log memory at start
-        log_memory_usage("Predict endpoint START")
-        
         data = predict_data.dict()
         data = sanitize_input(data)
         
@@ -464,8 +494,6 @@ async def predict(
         if not risk_validation['valid']:
             raise HTTPException(status_code=400, detail=risk_validation['error'])
         
-        log_memory_usage("Before MCP adapter call")
-        
         result = mcp_adapter.predict(
             symbols=data['symbols'],
             horizon=data['horizon'],
@@ -475,7 +503,6 @@ async def predict(
             drawdown_limit_pct=data.get('drawdown_limit_pct')
         )
         
-        log_memory_usage("After MCP adapter call")
         log_api_request('/tools/predict', data, result, 200)
         
         return result
@@ -487,6 +514,71 @@ async def predict(
         error_response = {'error': str(e)}
         log_api_request('/tools/predict', predict_data.dict(), error_response, 500)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/predict/async")
+async def predict_async(
+    request: Request,
+    predict_data: PredictRequest,
+    client_ip: str = Depends(check_rate_limit)
+):
+    """Start prediction in background; returns job_id immediately. Poll GET /tools/predict/result/{job_id} for result."""
+    try:
+        data = predict_data.dict()
+        data = sanitize_input(data)
+        validation = validate_symbols(data['symbols'])
+        if not validation['valid']:
+            raise HTTPException(status_code=400, detail=validation['error'])
+        if not validate_horizon(data['horizon']):
+            raise HTTPException(status_code=400, detail='Invalid horizon. Valid options: intraday, short, long')
+        risk_validation = validate_risk_parameters(
+            data.get('stop_loss_pct'), data.get('capital_risk_pct'), data.get('drawdown_limit_pct')
+        )
+        if not risk_validation['valid']:
+            raise HTTPException(status_code=400, detail=risk_validation['error'])
+
+        _prune_old_jobs()
+        job_id = str(uuid.uuid4())
+        with _predict_jobs_lock:
+            _predict_jobs[job_id] = {
+                "status": "pending",
+                "result": None,
+                "error": None,
+                "created_at": time.time(),
+            }
+        thread = threading.Thread(target=_run_predict_job, args=(job_id, data), daemon=True)
+        thread.start()
+        return {
+            "job_id": job_id,
+            "status": "accepted",
+            "message": f"Poll GET /tools/predict/result/{job_id} for result (may take 2–10 minutes).",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Predict async error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tools/predict/result/{job_id}")
+async def predict_result(job_id: str):
+    """Get status and result of an async prediction job. Returns 202 while running, 200 with result when done."""
+    _prune_old_jobs()
+    with _predict_jobs_lock:
+        job = _predict_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired.")
+    status = job["status"]
+    if status == "pending" or status == "running":
+        return JSONResponse(status_code=202, content={"job_id": job_id, "status": status})
+    if status == "completed":
+        return job["result"]
+    if status == "failed":
+        return JSONResponse(
+            status_code=200,
+            content={"status": "failed", "job_id": job_id, "error": job.get("error", "Unknown error")},
+        )
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": status})
 
 
 @app.post("/tools/scan_all")

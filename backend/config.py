@@ -40,6 +40,21 @@ UVICORN_HOST = os.getenv('UVICORN_HOST', '0.0.0.0')
 UVICORN_PORT = int(os.getenv('PORT', os.getenv('UVICORN_PORT', '8000')))
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
 
+# CORS: comma-separated list of allowed frontend origins (e.g. https://trade-bot-dashboard-llb8.onrender.com)
+# Set CORS_ALLOW_ALL=true to allow all origins (useful for debugging)
+CORS_ALLOW_ALL = os.getenv('CORS_ALLOW_ALL', 'false').lower() == 'true'
+CORS_ORIGINS_EXTRA = [x.strip() for x in os.getenv('CORS_ORIGINS', '').split(',') if x.strip()]
+
+# Auto-detect Render domains
+if os.getenv('RENDER'):
+    # When running on Render, automatically allow common Render domains
+    CORS_ORIGINS_EXTRA.extend([
+        "https://trade-bot-dashboard-c9x3.onrender.com",
+        "https://trade-bot-dashboard-llb8.onrender.com",
+        "https://trade-bot-frontend-halb.onrender.com",
+        "https://trade-bot-api.onrender.com",
+    ])
+
 # Directories
 DATA_DIR = Path("data")
 DATA_CACHE_DIR = DATA_DIR / "cache"

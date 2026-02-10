@@ -25,7 +25,7 @@ export const ConnectionProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     isChecking: true,
     error: null,
     lastCheck: null,
-    backendUrl: import.meta.env.VITE_API_BASE_BACKEND_URL || 'https://trade-bot-api.onrender.com',
+    backendUrl: import.meta.env.VITE_API_BASE_BACKEND_URL || 'http://127.0.0.1:8000',
   });
 
   // Sync with centralized backend status
@@ -57,10 +57,11 @@ export const ConnectionProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   );
 };
 
-export const useConnection = () => {
+export const useConnection = (): ConnectionContextType => {
   const context = useContext(ConnectionContext);
-  if (context === undefined) {
-    throw new Error('useConnection must be used within a ConnectionProvider');
+  if (!context) {
+    throw new Error('useConnection must be used within ConnectionProvider');
   }
   return context;
 };
+
