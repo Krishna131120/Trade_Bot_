@@ -68,6 +68,7 @@ app.add_middleware(
         "http://127.0.0.1:8000",
         "http://localhost:5000",
         "http://127.0.0.1:5000",
+        "https://trade-bot-dashboard-c9x3.onrender.com",
         "https://trade-bot-frontend-halb.onrender.com"
     ],
     allow_credentials=True,
