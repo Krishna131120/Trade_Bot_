@@ -6,6 +6,7 @@ Provides tool-style interfaces for stock prediction system
 import json
 import time
 import logging
+import gc
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pathlib import Path
@@ -116,6 +117,9 @@ class MCPAdapter:
                 logger.error(f"Failed to log response even with default=str: {e2}")
         
         logger.info(f"MCP Response [{request_id}]: {duration_ms:.2f}ms")
+        
+        # Aggressive garbage collection after every request to prevent memory leaks on Render
+        gc.collect()
     
     def predict(
         self,
@@ -766,7 +770,8 @@ class MCPAdapter:
             
             # STEP 3: Train all models (includes DQN)
             logger.info(f"[{request_id}] Starting training for horizon: {horizon}")
-            from stock_analysis_complete import train_ml_models, DQNTradingAgent
+            from stock_analysis_complete import train_ml_models
+            from core.dqn_agent import DQNTradingAgent
             
             training_result = train_ml_models(symbol, horizon, verbose=True)
             
@@ -794,7 +799,7 @@ class MCPAdapter:
             if not metrics:
                 logger.info(f"[{request_id}] Metrics not in training result, loading agent...")
                 try:
-                    from stock_analysis_complete import DQNTradingAgent
+                    from core.dqn_agent import DQNTradingAgent
                     dqn_agent = DQNTradingAgent(n_features=1)  # Will be updated when loading
                     dqn_agent.load(symbol, horizon)
                     metrics = dqn_agent._calculate_performance_metrics()

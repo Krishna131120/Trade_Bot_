@@ -26,7 +26,7 @@ export const GlobalOfflineIndicator: React.FC = () => {
         </div>
 
         <div className="text-sm opacity-90">
-          Ensure backend is running on port 5000
+          Check connection to https://trade-bot-api.onrender.com
         </div>
       </div>
     </div>
