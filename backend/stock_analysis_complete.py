@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, Optional, List, Union, Tuple
 from datetime import datetime, timedelta
 from tqdm import tqdm
-import pandas_ta_classic as ta
+import pandas_ta as ta
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
