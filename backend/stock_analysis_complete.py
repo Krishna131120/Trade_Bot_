@@ -1427,6 +1427,26 @@ class EnhancedDataIngester:
 # FEATURE ENGINEER - TECHNICAL INDICATORS
 # ============================================================================
 
+def _mfi_float64(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, length: int = 14) -> pd.Series:
+    """
+    Money Flow Index using float64 throughout. Avoids pandas_ta_classic bug where
+    assigning float raw_money_flow into int64 '+mf' column raises on pandas 2.x.
+    """
+    high = high.astype(np.float64, copy=False)
+    low = low.astype(np.float64, copy=False)
+    close = close.astype(np.float64, copy=False)
+    volume = volume.astype(np.float64, copy=False)
+    typical_price = (high + low + close) / 3.0
+    raw_money_flow = typical_price * volume
+    diff = typical_price.diff(1)
+    pos_mf = raw_money_flow.where(diff > 0, 0.0)
+    neg_mf = raw_money_flow.where(diff < 0, 0.0)
+    psum = pos_mf.rolling(length, min_periods=1).sum()
+    nsum = neg_mf.rolling(length, min_periods=1).sum()
+    mfi = 100.0 * psum / (psum + nsum + 1e-10)
+    return mfi.fillna(0.0)
+
+
 class FeatureEngineer:
     """
     Calculate technical indicators and features for stock data
@@ -1551,7 +1571,7 @@ class FeatureEngineer:
         print("[feat] momentum: CCI...", flush=True)
         df['CCI'] = ta.cci(df['High'], df['Low'], df['Close'], length=20)
         print("[feat] momentum: MFI...", flush=True)
-        df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
+        df['MFI'] = _mfi_float64(df['High'], df['Low'], df['Close'], df['Volume'], length=14)
         print("[feat] momentum: ROC...", flush=True)
         if fast_features:
             # Fast path: pandas ROC (avoids hang in ta.roc on Render)
