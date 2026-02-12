@@ -20,7 +20,7 @@ const LayoutContent = ({ children }: LayoutProps) => {
   const [, forceUpdate] = useState({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  
+
   // Determine if we're on the market scan page
   const isOnMarketScan = location.pathname === '/market-scan' || location.pathname.startsWith('/market-scan');
 
@@ -34,7 +34,7 @@ const LayoutContent = ({ children }: LayoutProps) => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-  
+
   // Listen for theme changes to force re-render
   useEffect(() => {
     const handleThemeChange = () => {
@@ -44,10 +44,6 @@ const LayoutContent = ({ children }: LayoutProps) => {
     return () => window.removeEventListener('themechange', handleThemeChange);
   }, []);
 
-  const handleSearch = (query: string) => {
-    // Navigate to market scan with search query and asset type
-    navigate(`/market-scan?q=${encodeURIComponent(query)}&type=${assetType}`);
-  };
 
   const handleTabChange = (tab: 'stocks' | 'crypto' | 'commodities') => {
     setAssetType(tab);
@@ -58,26 +54,24 @@ const LayoutContent = ({ children }: LayoutProps) => {
   };
 
   return (
-    <div 
+    <div
       key={theme} // Force re-render when theme changes
-      className={`flex flex-col lg:flex-row h-screen relative w-full overflow-hidden ${
-        theme === 'light' ? 'bg-gray-100' : 
+      className={`flex flex-col lg:flex-row h-screen relative w-full overflow-hidden ${theme === 'light' ? 'bg-gray-100' :
         theme === 'space' ? 'bg-[#1b0725]' : // Deep purple-black matching Space theme
-        'bg-slate-900'
-      }`}
+          'bg-slate-900'
+        }`}
       style={theme === 'space' ? { backgroundColor: '#1b0725' } : undefined}
     >
       {theme === 'space' && <UniGuruBackground key="uniguru-bg" />}
-      <Sidebar 
-        isOpen={sidebarOpen} 
-        onClose={() => setSidebarOpen(false)} 
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
         isCollapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
       <div className={`flex-1 flex flex-col overflow-hidden relative z-10 w-full min-w-0`}>
-        <Navbar 
-          onSearch={handleSearch} 
-          activeTab={assetType} 
+        <Navbar
+          activeTab={assetType}
           onTabChange={handleTabChange}
           onMenuClick={() => setSidebarOpen(true)}
           showAssetTabs={isOnMarketScan}
@@ -95,9 +89,9 @@ const LayoutContent = ({ children }: LayoutProps) => {
 
 const Layout = ({ children }: LayoutProps) => {
   return (
-      <AssetTypeProvider>
-        <LayoutContent>{children}</LayoutContent>
-      </AssetTypeProvider>
+    <AssetTypeProvider>
+      <LayoutContent>{children}</LayoutContent>
+    </AssetTypeProvider>
   );
 };
 
