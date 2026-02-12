@@ -3448,6 +3448,17 @@ def complete_analysis(symbol: str):
     if not all_data:
         print(f"\n[ERROR] Could not fetch data for {symbol}")
         return
+    try:
+        import pandas_ta as ta  # Technical indicators
+    except ImportError:
+        print("Warning: pandas_ta not available. Some technical indicators may not work.")
+        ta = None
+
+    # Try classic import - comment out if causes issues
+    # try:
+    #     from pandas_ta_classic import pandas_ta_classic
+    # except ImportError:
+    #     pandas_ta_classic = None
     
     # Step 2: Calculate technical indicators
     print(f"\n[STEP 2/3] Calculating technical indicators...")

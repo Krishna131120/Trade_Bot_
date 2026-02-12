@@ -181,7 +181,10 @@ class LivePriceValidator:
                 'price_difference_pct': round(price_diff_pct, 2),
                 'return_recalculated': True
             }
-            
+            logger.info(
+                f"Live price applied for {symbol}: reference={live_price:.2f}, "
+                f"predicted={predicted_price:.2f}, expected_return={new_predicted_return:.2f}%"
+            )
             # Log significant price differences
             if abs(price_diff_pct) > 1:
                 logger.warning(

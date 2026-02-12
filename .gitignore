@@ -59,3 +59,6 @@ trading-dashboard/build/
 
 # Git
 .git-rewrite/
+
+# Legacy HFT (now integrated into backend/hft/)
+hft2/

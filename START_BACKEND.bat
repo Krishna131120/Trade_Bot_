@@ -1,10 +1,5 @@
 @echo off
-echo ================================================================================
-echo Starting Backend Server on http://localhost:8000
-echo ================================================================================
+echo Starting HFT Backend Server on port 5001...
 echo.
-
-cd backend
-python api_server.py
-
-pause
+cd /d "C:\Users\pc44\Downloads\trade-bot-main\hft2\backend"
+python simple_app.py --port 5001

@@ -1,12 +1,5 @@
 @echo off
-echo ================================================================================
-echo Starting Frontend on http://localhost:5173
-echo ================================================================================
+echo Starting HFT Trading Dashboard Frontend...
 echo.
-echo Make sure Backend is running on http://localhost:8000
-echo.
-
-cd trading-dashboard
-npm run dev
-
-pause
+cd /d "C:\Users\pc44\Downloads\trade-bot-main\trading-dashboard"
+"C:\Program Files\nodejs\npm.cmd" run dev

@@ -111,6 +111,11 @@ except Exception as e:
 # Initialize Live Price Validator
 price_validator = LivePriceValidator()
 
+# Import and register HFT routes
+from hft.routes import hft_router
+app.include_router(hft_router, prefix="/api", tags=["HFT Bot"])
+logger.info("HFT Bot routes registered at /api/*")
+
 # API request logging
 API_LOG_PATH = Path("data/logs/api_requests.jsonl")
 SECURITY_LOG_PATH = Path("data/logs/security.jsonl")
