@@ -47,7 +47,7 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
 
 
   const menuItems = [
-    { path: '/hft', icon: Activity, label: 'HFT Bot' },
+    { path: '/hft', icon: Activity, label: 'BOT' },
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/market-scan', icon: Search, label: 'Market Scan' },
     { path: '/portfolio', icon: Briefcase, label: 'Portfolio' },

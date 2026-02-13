@@ -1,142 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import styled from 'styled-components';
+import { useTheme } from '../../contexts/ThemeContext';
+import { X } from 'lucide-react';
 import type { HftSettingsUpdate } from '../../types/hft';
-
-const ModalOverlay = styled.div`
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-`;
-
-const ModalContent = styled.div`
-  background: white;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 500px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-  max-height: 90vh;
-  overflow-y: auto;
-`;
-
-const ModalHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px;
-  border-bottom: 1px solid #e9ecef;
-
-  h3 {
-    color: #2c3e50;
-    margin: 0;
-  }
-`;
-
-const CloseButton = styled.button`
-  background: none;
-  border: none;
-  font-size: 1.2rem;
-  cursor: pointer;
-  color: #7f8c8d;
-  padding: 5px;
-  border-radius: 50%;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &:hover {
-    color: #e74c3c;
-    background: #f8f9fa;
-  }
-`;
-
-const ModalBody = styled.div`
-  padding: 20px;
-`;
-
-const SettingGroup = styled.div`
-  margin-bottom: 20px;
-
-  label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: 500;
-    color: #2c3e50;
-  }
-
-  select, input {
-    width: 100%;
-    padding: 10px;
-    border: 2px solid #e9ecef;
-    border-radius: 6px;
-    font-size: 1rem;
-    box-sizing: border-box;
-
-    &:focus {
-      outline: none;
-      border-color: #3498db;
-    }
-  }
-
-  input[type="number"] {
-    -moz-appearance: textfield;
-    
-    &::-webkit-outer-spin-button,
-    &::-webkit-inner-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
-    }
-  }
-`;
-
-const ModalFooter = styled.div`
-  padding: 20px;
-  border-top: 1px solid #e9ecef;
-  text-align: right;
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-`;
-
-const Button = styled.button`
-  padding: 10px 20px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 1rem;
-  transition: all 0.3s ease;
-  border: none;
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-`;
-
-const SaveButton = styled(Button)`
-  background: #27ae60;
-  color: white;
-
-  &:hover:not(:disabled) {
-    background: #229954;
-  }
-`;
-
-const CancelButton = styled(Button)`
-  background: #95a5a6;
-  color: white;
-
-  &:hover:not(:disabled) {
-    background: #7f8c8d;
-  }
-`;
 
 interface SettingsFormData {
     mode: 'paper' | 'live';
@@ -152,6 +17,10 @@ interface HftSettingsModalProps {
 }
 
 const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, onClose }) => {
+    const { theme } = useTheme();
+    const isLight = theme === 'light';
+    const isSpace = theme === 'space';
+
     const [formData, setFormData] = useState<SettingsFormData>({
         mode: 'paper',
         riskLevel: 'MEDIUM',
@@ -250,50 +119,96 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
         }
     };
 
-    return (
-        <ModalOverlay onClick={handleOverlayClick}>
-            <ModalContent>
-                <ModalHeader>
-                    <h3>Settings</h3>
-                    <CloseButton onClick={onClose}>
-                        <i className="fas fa-times"></i>
-                    </CloseButton>
-                </ModalHeader>
+    const modalBg = isLight ? 'bg-white' : isSpace ? 'bg-slate-800/95' : 'bg-slate-800';
+    const modalBorder = isLight ? 'border-gray-200' : isSpace ? 'border-purple-900/30' : 'border-slate-700';
+    const textPrimary = isLight ? 'text-gray-900' : 'text-white';
+    const textMuted = isLight ? 'text-gray-600' : 'text-gray-400';
+    const inputBg = isLight ? 'bg-white' : 'bg-slate-700';
+    const inputBorder = isLight ? 'border-gray-300' : 'border-slate-600';
+    const inputDisabledBg = isLight ? 'bg-gray-100' : 'bg-slate-800';
+    const selectBg = isLight ? 'bg-white' : 'bg-slate-700';
+    const selectText = isLight ? 'text-gray-900' : 'text-white';
 
-                <ModalBody>
-                    <SettingGroup>
-                        <label>Trading Mode:</label>
+    return (
+        <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={handleOverlayClick}
+        >
+            <div
+                className={`${modalBg} border ${modalBorder} rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto`}
+                onClick={(e) => e.stopPropagation()}
+            >
+                {/* Header */}
+                <div className={`flex items-center justify-between p-6 border-b ${modalBorder}`}>
+                    <h3 className={`text-xl font-bold ${textPrimary}`}>Settings</h3>
+                    <button
+                        onClick={onClose}
+                        className={`p-2 rounded-lg transition-colors ${
+                            isLight
+                                ? 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                                : 'text-gray-400 hover:bg-slate-700 hover:text-white'
+                        }`}
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                {/* Body */}
+                <div className="p-6 space-y-6">
+                    {/* Trading Mode */}
+                    <div>
+                        <label className={`block text-sm font-semibold mb-2 ${textPrimary}`}>
+                            Trading Mode:
+                        </label>
                         <select
                             value={formData.mode}
                             onChange={(e) => handleInputChange('mode', e.target.value as 'paper' | 'live')}
                             disabled={loading}
+                            className={`w-full px-4 py-3 rounded-lg border-2 transition-colors ${selectBg} ${selectText} ${inputBorder} focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed`}
+                            style={{
+                                appearance: 'auto',
+                                WebkitAppearance: 'menulist',
+                                MozAppearance: 'menulist'
+                            }}
                         >
-                            <option value="paper">Paper Trading</option>
-                            <option value="live">Live Trading</option>
+                            <option value="paper" className={selectText}>Paper Trading</option>
+                            <option value="live" className={selectText}>Live Trading</option>
                         </select>
-                        <small style={{ color: '#6c757d', fontSize: '0.85rem', marginTop: '6px', display: 'block' }}>
+                        <p className={`text-xs mt-2 ${textMuted}`}>
                             {formData.mode === 'live'
                                 ? 'Live: real positions and prices from Dhan (run HFT2 backend with env).'
                                 : 'Paper: no positions shown (no stale data).'}
-                        </small>
-                    </SettingGroup>
+                        </p>
+                    </div>
 
-                    <SettingGroup>
-                        <label>Risk Level:</label>
+                    {/* Risk Level */}
+                    <div>
+                        <label className={`block text-sm font-semibold mb-2 ${textPrimary}`}>
+                            Risk Level:
+                        </label>
                         <select
                             value={formData.riskLevel}
                             onChange={(e) => handleInputChange('riskLevel', e.target.value)}
                             disabled={loading}
+                            className={`w-full px-4 py-3 rounded-lg border-2 transition-colors ${selectBg} ${selectText} ${inputBorder} focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed`}
+                            style={{
+                                appearance: 'auto',
+                                WebkitAppearance: 'menulist',
+                                MozAppearance: 'menulist'
+                            }}
                         >
-                            <option value="LOW">Low (3% stop-loss, 15% allocation)</option>
-                            <option value="MEDIUM">Medium (5% stop-loss, 25% allocation)</option>
-                            <option value="HIGH">High (8% stop-loss, 35% allocation)</option>
-                            <option value="CUSTOM">Custom (Set your own values)</option>
+                            <option value="LOW" className={selectText}>Low (3% stop-loss, 15% allocation)</option>
+                            <option value="MEDIUM" className={selectText}>Medium (5% stop-loss, 25% allocation)</option>
+                            <option value="HIGH" className={selectText}>High (8% stop-loss, 35% allocation)</option>
+                            <option value="CUSTOM" className={selectText}>Custom (Set your own values)</option>
                         </select>
-                    </SettingGroup>
+                    </div>
 
-                    <SettingGroup>
-                        <label>Max Allocation per Trade (%):</label>
+                    {/* Max Allocation */}
+                    <div>
+                        <label className={`block text-sm font-semibold mb-2 ${textPrimary}`}>
+                            Max Allocation per Trade (%):
+                        </label>
                         <input
                             type="number"
                             min="1"
@@ -302,21 +217,22 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
                             placeholder={formData.riskLevel === 'CUSTOM' ? 'Enter percentage (1-100)' : ''}
                             onChange={(e) => handleInputChange('maxAllocation', e.target.value)}
                             disabled={loading || formData.riskLevel !== 'CUSTOM'}
-                            style={{
-                                backgroundColor: formData.riskLevel !== 'CUSTOM' ? '#f8f9fa' : 'white',
-                                cursor: formData.riskLevel !== 'CUSTOM' ? 'not-allowed' : 'text',
-                                border: formData.riskLevel === 'CUSTOM' ? '2px solid #3498db' : '2px solid #e9ecef'
-                            }}
+                            className={`w-full px-4 py-3 rounded-lg border-2 transition-colors ${
+                                formData.riskLevel === 'CUSTOM' ? inputBg : inputDisabledBg
+                            } ${selectText} ${inputBorder} focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed`}
                         />
                         {formData.riskLevel !== 'CUSTOM' && (
-                            <small style={{ color: '#6c757d', fontSize: '0.85rem', marginTop: '5px', display: 'block' }}>
+                            <p className={`text-xs mt-2 ${textMuted}`}>
                                 Select "Custom" risk level to modify this value
-                            </small>
+                            </p>
                         )}
-                    </SettingGroup>
+                    </div>
 
-                    <SettingGroup>
-                        <label>Stop Loss Percentage (%):</label>
+                    {/* Stop Loss */}
+                    <div>
+                        <label className={`block text-sm font-semibold mb-2 ${textPrimary}`}>
+                            Stop Loss Percentage (%):
+                        </label>
                         <input
                             type="number"
                             min="1"
@@ -326,30 +242,41 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
                             placeholder={formData.riskLevel === 'CUSTOM' ? 'Enter percentage (1-20)' : ''}
                             onChange={(e) => handleInputChange('stopLossPct', e.target.value)}
                             disabled={loading || formData.riskLevel !== 'CUSTOM'}
-                            style={{
-                                backgroundColor: formData.riskLevel !== 'CUSTOM' ? '#f8f9fa' : 'white',
-                                cursor: formData.riskLevel !== 'CUSTOM' ? 'not-allowed' : 'text',
-                                border: formData.riskLevel === 'CUSTOM' ? '2px solid #e74c3c' : '2px solid #e9ecef'
-                            }}
+                            className={`w-full px-4 py-3 rounded-lg border-2 transition-colors ${
+                                formData.riskLevel === 'CUSTOM' ? inputBg : inputDisabledBg
+                            } ${selectText} ${inputBorder} focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed`}
                         />
                         {formData.riskLevel !== 'CUSTOM' && (
-                            <small style={{ color: '#6c757d', fontSize: '0.85rem', marginTop: '5px', display: 'block' }}>
+                            <p className={`text-xs mt-2 ${textMuted}`}>
                                 Select "Custom" risk level to modify this value
-                            </small>
+                            </p>
                         )}
-                    </SettingGroup>
-                </ModalBody>
+                    </div>
+                </div>
 
-                <ModalFooter>
-                    <CancelButton onClick={onClose} disabled={loading}>
+                {/* Footer */}
+                <div className={`flex items-center justify-end gap-3 p-6 border-t ${modalBorder}`}>
+                    <button
+                        onClick={onClose}
+                        disabled={loading}
+                        className={`px-6 py-2.5 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                            isLight
+                                ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                : 'bg-slate-700 text-gray-200 hover:bg-slate-600'
+                        }`}
+                    >
                         Cancel
-                    </CancelButton>
-                    <SaveButton onClick={handleSave} disabled={loading}>
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={loading}
+                        className="px-6 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition-colors"
+                    >
                         {loading ? 'Saving...' : 'Save Settings'}
-                    </SaveButton>
-                </ModalFooter>
-            </ModalContent>
-        </ModalOverlay>
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 };
 

@@ -1,55 +1,23 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import styled from 'styled-components';
 import toast, { Toaster } from 'react-hot-toast';
-import HftSidebar from '@/components/hft/HftSidebar';
-import HftHeader from '@/components/hft/HftHeader';
+import Layout from '@/components/Layout';
+import { useTheme } from '@/contexts/ThemeContext';
 import HftDashboard from '@/components/hft/HftDashboard';
 import HftPortfolio from '@/components/hft/HftPortfolio';
 import HftChatAssistant from '@/components/hft/HftChatAssistant';
 import HftLoadingOverlay from '@/components/hft/HftLoadingOverlay';
 import HftSettingsModal from '@/components/hft/HftSettingsModal';
-import { hftApiService } from '@/services/hftApiService';
+import { hftApiService, formatCurrency, formatPercentage } from '@/services/hftApiService';
 import type { HftBotData, HftChatMessage } from '@/types/hft';
-
-const AppContainer = styled.div`
-  display: flex;
-  min-height: 100vh;
-  width: 100%;
-  background: #ffffff;
-`;
-
-const MainContent = styled.div`
-  flex: 1;
-  padding: 20px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-
-  &::-webkit-scrollbar { width: 8px; }
-  &::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.05); border-radius: 4px; }
-  &::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
-  &::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); }
-  scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
-`;
-
-const TabContent = styled.div`
-  background: white;
-  border-radius: 12px;
-  padding: 25px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  flex: 1;
-  overflow: visible;
-  display: flex;
-  flex-direction: column;
-  margin-bottom: 20px;
-`;
+import { CheckCircle2, AlertCircle, RefreshCw, Play, Square, LayoutDashboard, Briefcase, MessageCircle } from 'lucide-react';
 
 export default function HftPage() {
+    const { theme } = useTheme();
+    const isLight = theme === 'light';
+    const isSpace = theme === 'space';
+
     const [activeTab, setActiveTab] = useState<'dashboard' | 'portfolio' | 'chat'>('dashboard');
     const [botData, setBotData] = useState<HftBotData>({
         portfolio: {
@@ -72,6 +40,7 @@ export default function HftPage() {
     const [loading, setLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [liveStatus, setLiveStatus] = useState<any>(null);
+    const [connected, setConnected] = useState(false);
 
     useEffect(() => {
         initializeApp();
@@ -84,7 +53,7 @@ export default function HftPage() {
             setLoading(true);
             await loadDataFromBackend();
             await loadLiveStatus();
-
+            setConnected(true);
             if (botData.chatMessages.length === 0) {
                 setBotData(prev => ({
                     ...prev,
@@ -98,6 +67,7 @@ export default function HftPage() {
         } catch (error) {
             console.error('Error initializing app:', error);
             toast.error('Failed to initialize application');
+            setConnected(false);
         } finally {
             setLoading(false);
         }
@@ -111,9 +81,11 @@ export default function HftPage() {
                 ...data,
                 chatMessages: prev.chatMessages
             }));
+            setConnected(true);
         } catch (error) {
             console.error('Error loading data from backend:', error);
             toast.error('Failed to load bot data');
+            setConnected(false);
         }
     };
 
@@ -170,20 +142,16 @@ export default function HftPage() {
                 content: message,
                 timestamp: new Date().toISOString()
             };
-
             setBotData(prev => ({
                 ...prev,
                 chatMessages: [...prev.chatMessages, userMessage]
             }));
-
             const response = await hftApiService.sendChatMessage(message);
-
             const assistantMessage: HftChatMessage = {
                 role: 'assistant',
                 content: response.response,
                 timestamp: new Date().toISOString()
             };
-
             setBotData(prev => ({
                 ...prev,
                 chatMessages: [...prev.chatMessages, assistantMessage]
@@ -228,43 +196,151 @@ export default function HftPage() {
         }
     };
 
+    const mode = (liveStatus?.mode ?? botData?.config?.mode) || 'paper';
+    const totalValue = botData.portfolio.totalValue;
+    const cash = botData.portfolio.cash;
+    const startingBalance = botData.portfolio.startingBalance || totalValue;
+    const cashInvested = startingBalance - cash;
+    const totalReturn = totalValue - startingBalance;
+    const returnPercentage = startingBalance > 0 ? (totalReturn / startingBalance) * 100 : 0;
+    const positionsCount = Object.keys(botData.portfolio.holdings).length;
+
+    const cardBg = isLight ? 'bg-white' : isSpace ? 'bg-slate-800/80' : 'bg-slate-800';
+    const cardBorder = isLight ? 'border-gray-200' : isSpace ? 'border-purple-900/30' : 'border-slate-700';
+    const textPrimary = isLight ? 'text-gray-900' : 'text-white';
+    const textMuted = isLight ? 'text-gray-600' : 'text-gray-400';
+
     return (
         <>
             <Toaster position="top-right" />
-            <AppContainer>
-                <HftSidebar
-                    botData={botData}
-                    onStartBot={handleStartBot}
-                    onStopBot={handleStopBot}
-                    onRefresh={refreshData}
-                />
+            <Layout>
+                <div className={`space-y-3 md:space-y-4 w-full ${isLight ? '' : 'animate-fadeIn'}`}>
+                    {/* Header: title + status + refresh (same structure as main dashboard) */}
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                                <h1 className={`text-xl md:text-2xl font-bold ${textPrimary}`}>BOT</h1>
+                                <div className="flex items-center gap-2">
+                                    {connected ? (
+                                        <div className="flex items-center gap-1 px-2 py-0.5 bg-green-500/20 border border-green-500/50 rounded-lg">
+                                            <CheckCircle2 className="w-3 h-3 text-green-400" />
+                                            <span className="text-green-400 text-xs font-medium">Connected</span>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 border border-red-500/50 rounded-lg">
+                                            <AlertCircle className="w-3 h-3 text-red-400" />
+                                            <span className="text-red-400 text-xs font-medium">Offline</span>
+                                        </div>
+                                    )}
+                                    <div className={`flex items-center gap-1 px-2 py-0.5 rounded-lg border ${mode === 'live' ? 'bg-red-500/20 border-red-500/50' : 'bg-blue-500/20 border-blue-500/50'}`}>
+                                        <span className={`w-2 h-2 rounded-full ${mode === 'live' ? 'bg-red-400' : 'bg-blue-400'}`} />
+                                        <span className={`${mode === 'live' ? 'text-red-400' : 'text-blue-400'} text-xs font-medium`}>
+                                            {mode === 'live' ? 'Live Trading' : 'Paper Trading'}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <p className={`text-xs md:text-sm ${textMuted}`}>
+                                Updated {new Date().toLocaleTimeString()}
+                            </p>
+                        </div>
+                        <button
+                            onClick={refreshData}
+                            disabled={loading}
+                            className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-semibold transition-all disabled:opacity-50 w-full md:w-auto min-h-[44px] md:min-h-0"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            Refresh
+                        </button>
+                    </div>
 
-                <MainContent>
-                    <HftHeader
-                        activeTab={activeTab}
-                        onTabChange={setActiveTab}
-                        botData={botData}
-                        liveStatus={liveStatus}
-                        onOpenSettings={() => setShowSettings(true)}
-                    />
+                    {/* Portfolio metrics row (same idea as main dashboard cards) */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className={`${cardBg} border ${cardBorder} rounded-xl p-4`}>
+                            <p className={`text-xs font-medium uppercase tracking-wide ${textMuted}`}>Total Value</p>
+                            <p className={`text-lg font-bold ${textPrimary}`}>{formatCurrency(totalValue)}</p>
+                        </div>
+                        <div className={`${cardBg} border ${cardBorder} rounded-xl p-4`}>
+                            <p className={`text-xs font-medium uppercase tracking-wide ${textMuted}`}>Cash</p>
+                            <p className={`text-lg font-bold ${textPrimary}`}>{formatCurrency(cash)}</p>
+                        </div>
+                        <div className={`${cardBg} border ${cardBorder} rounded-xl p-4`}>
+                            <p className={`text-xs font-medium uppercase tracking-wide ${textMuted}`}>Total Return</p>
+                            <p className={`text-lg font-bold ${textPrimary}`}>{formatCurrency(totalReturn)}</p>
+                            <p className={`text-sm font-semibold ${returnPercentage >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                {formatPercentage(returnPercentage)}
+                            </p>
+                        </div>
+                        <div className={`${cardBg} border ${cardBorder} rounded-xl p-4`}>
+                            <p className={`text-xs font-medium uppercase tracking-wide ${textMuted}`}>Positions</p>
+                            <p className={`text-lg font-bold ${textPrimary}`}>{positionsCount}</p>
+                        </div>
+                    </div>
 
-                    <TabContent>
-                        {activeTab === 'dashboard' && <HftDashboard botData={botData} />}
-                        {activeTab === 'portfolio' && (
-                            <HftPortfolio
-                                botData={botData}
-                                onAddTicker={handleAddTicker}
-                                onRemoveTicker={handleRemoveTicker}
-                            />
-                        )}
-                        {activeTab === 'chat' && (
-                            <HftChatAssistant
-                                messages={botData.chatMessages}
-                                onSendMessage={handleSendMessage}
-                            />
-                        )}
-                    </TabContent>
-                </MainContent>
+                    {/* Quick actions */}
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            onClick={handleStartBot}
+                            disabled={botData.isRunning}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all"
+                        >
+                            <Play className="w-4 h-4" /> Start Bot
+                        </button>
+                        <button
+                            onClick={handleStopBot}
+                            disabled={!botData.isRunning}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all"
+                        >
+                            <Square className="w-4 h-4" /> Stop Bot
+                        </button>
+                        <button
+                            onClick={() => setShowSettings(true)}
+                            disabled={botData.isRunning}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-600 hover:bg-slate-700 disabled:opacity-50 text-white rounded-lg text-sm font-semibold transition-all"
+                        >
+                            Settings
+                        </button>
+                    </div>
+
+                    {/* Tabs (Dashboard / Portfolio / Chat) */}
+                    <div className={`${cardBg} border ${cardBorder} rounded-xl overflow-hidden`}>
+                        <div className={`flex border-b ${cardBorder} p-1 gap-1`}>
+                            {[
+                                { id: 'dashboard' as const, label: 'Dashboard', icon: LayoutDashboard },
+                                { id: 'portfolio' as const, label: 'Portfolio', icon: Briefcase },
+                                { id: 'chat' as const, label: 'Chat Assistant', icon: MessageCircle }
+                            ].map(({ id, label, icon: Icon }) => (
+                                <button
+                                    key={id}
+                                    onClick={() => setActiveTab(id)}
+                                    className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
+                                        activeTab === id
+                                            ? isLight ? 'bg-blue-500 text-white' : 'bg-blue-600 text-white'
+                                            : isLight ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-400 hover:bg-slate-700'
+                                    }`}
+                                >
+                                    <Icon className="w-4 h-4" /> {label}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="p-4 md:p-6 min-h-[400px]">
+                            {activeTab === 'dashboard' && <HftDashboard botData={botData} />}
+                            {activeTab === 'portfolio' && (
+                                <HftPortfolio
+                                    botData={botData}
+                                    onAddTicker={handleAddTicker}
+                                    onRemoveTicker={handleRemoveTicker}
+                                />
+                            )}
+                            {activeTab === 'chat' && (
+                                <HftChatAssistant
+                                    messages={botData.chatMessages}
+                                    onSendMessage={handleSendMessage}
+                                />
+                            )}
+                        </div>
+                    </div>
+                </div>
 
                 {loading && <HftLoadingOverlay />}
                 {showSettings && (
@@ -274,7 +350,7 @@ export default function HftPage() {
                         onClose={() => setShowSettings(false)}
                     />
                 )}
-            </AppContainer>
+            </Layout>
         </>
     );
 }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
+import { useTheme } from '../../contexts/ThemeContext';
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -146,6 +147,8 @@ interface HftDashboardProps {
 }
 
 const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
+    const { theme } = useTheme();
+    const isLight = theme === 'light';
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('1M');
 
     const getPeriodDescription = (): string => {
@@ -426,34 +429,39 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
     const portfolioChartData = generatePortfolioChartData();
     const allocationChartData = generateAllocationChartData();
 
+    const themeWrapperClass = !isLight
+        ? '[&_.hft-metric]:!bg-slate-800 [&_.hft-metric]:!text-white [&_.hft-metric]:!border-slate-700 [&_.hft-metric_.hft-label]:!text-gray-400 [&_.hft-metric_.hft-value]:!text-white [&_.hft-chart]:!bg-slate-800 [&_.hft-chart]:!text-white [&_.hft-chart]:!border-slate-700 [&_.hft-chart_h3]:!text-white'
+        : '';
+
     return (
-        <DashboardContainer>
-            {/* Performance Metrics */}
-            <MetricsRow>
-                <MetricCard>
-                    <MetricLabel>Portfolio Value</MetricLabel>
-                    <MetricValue>{formatCurrency(metrics.totalValue)}</MetricValue>
-                </MetricCard>
+        <div className={themeWrapperClass}>
+            <DashboardContainer>
+                {/* Performance Metrics */}
+                <MetricsRow>
+                    <MetricCard className="hft-metric">
+                        <MetricLabel className="hft-label">Portfolio Value</MetricLabel>
+                        <MetricValue className="hft-value">{formatCurrency(metrics.totalValue)}</MetricValue>
+                    </MetricCard>
 
-                <MetricCard>
-                    <MetricLabel>Unrealized P&L</MetricLabel>
-                    <MetricValue>{formatCurrency(metrics.unrealizedPnL)}</MetricValue>
-                </MetricCard>
+                    <MetricCard className="hft-metric">
+                        <MetricLabel className="hft-label">Unrealized P&L</MetricLabel>
+                        <MetricValue className="hft-value">{formatCurrency(metrics.unrealizedPnL)}</MetricValue>
+                    </MetricCard>
 
-                <MetricCard>
-                    <MetricLabel>Active Positions</MetricLabel>
-                    <MetricValue>{metrics.activePositions}</MetricValue>
-                </MetricCard>
+                    <MetricCard className="hft-metric">
+                        <MetricLabel className="hft-label">Active Positions</MetricLabel>
+                        <MetricValue className="hft-value">{metrics.activePositions}</MetricValue>
+                    </MetricCard>
 
-                <MetricCard>
-                    <MetricLabel>Trades Today</MetricLabel>
-                    <MetricValue>{metrics.tradesToday}</MetricValue>
-                </MetricCard>
-            </MetricsRow>
+                    <MetricCard className="hft-metric">
+                        <MetricLabel className="hft-label">Trades Today</MetricLabel>
+                        <MetricValue className="hft-value">{metrics.tradesToday}</MetricValue>
+                    </MetricCard>
+                </MetricsRow>
 
-            {/* Charts Section */}
-            <ChartsSection>
-                <ChartContainer>
+                {/* Charts Section */}
+                <ChartsSection>
+                    <ChartContainer className="hft-chart">
                     <ChartHeader>
                         <h3>Portfolio Performance</h3>
                         <TimePeriodButtons>
@@ -496,14 +504,15 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
                     </div>
                 </ChartContainer>
 
-                <ChartContainer>
+                <ChartContainer className="hft-chart">
                     <h3>Asset Allocation</h3>
                     <div style={{ height: '300px' }}>
                         <Doughnut data={allocationChartData} options={doughnutOptions} />
                     </div>
                 </ChartContainer>
             </ChartsSection>
-        </DashboardContainer>
+            </DashboardContainer>
+        </div>
     );
 };
 
