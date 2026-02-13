@@ -16,11 +16,13 @@ import TrainModelPage from './pages/TrainModelPage';
 import EducationalDashboardPage from './pages/EducationalDashboardPage';
 import SimulationToolsPage from './pages/SimulationToolsPage';
 import DebugPage from './pages/DebugPage';
+import HftPage from './app/hft/page';
 
 export const AppRoutes = () => {
   return (
     <Routes>
       <Route path="/" element={<DashboardPage />} />
+      <Route path="/hft" element={<HftPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/alerts" element={<AlertsPage />} />

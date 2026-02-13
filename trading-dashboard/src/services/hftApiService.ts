@@ -269,6 +269,29 @@ export const hftApiService = {
         }
     },
 
+    // ===== Vetting predictions (Market Scan backend) =====
+    async getPredictions(symbols: string[] = ['RELIANCE.NS'], horizon: string = 'intraday'): Promise<any> {
+        try {
+            const syms = symbols.length ? symbols.join(',') : 'RELIANCE.NS';
+            const response = await api.get(`/predictions?symbols=${encodeURIComponent(syms)}&horizon=${encodeURIComponent(horizon)}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching predictions:', error);
+            throw error;
+        }
+    },
+
+    // ===== Place order (buy/sell) =====
+    async placeOrder(symbol: string, side: 'BUY' | 'SELL', quantity: number, orderType: string = 'MARKET', price?: number): Promise<any> {
+        try {
+            const response = await api.post('/order', { symbol, side, quantity, order_type: orderType, price });
+            return response.data;
+        } catch (error) {
+            console.error('Error placing order:', error);
+            throw error;
+        }
+    },
+
     // ===== Health Check =====
     async healthCheck(): Promise<boolean> {
         try {

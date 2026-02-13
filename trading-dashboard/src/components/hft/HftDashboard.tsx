@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import {
     Chart as ChartJS,
@@ -14,7 +14,7 @@ import {
 } from 'chart.js';
 import { Line, Doughnut } from 'react-chartjs-2';
 import type { HftBotData } from '../../types/hft';
-import { formatCurrency } from '../../services/hftApiService';
+import { formatCurrency, hftApiService } from '../../services/hftApiService';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler);
 
@@ -145,8 +145,30 @@ interface HftDashboardProps {
     botData: HftBotData;
 }
 
+const PredictionsCard = styled.div`
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  h4 { margin: 0 0 8px 0; font-size: 1rem; color: #2c3e50; }
+  .pred-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: #555; }
+  .pred-signal { font-weight: 600; }
+`;
+
 const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('1M');
+    const [predictions, setPredictions] = useState<any>(null);
+    const [predictionsLoading, setPredictionsLoading] = useState(false);
+
+    useEffect(() => {
+        const tickers = botData?.config?.tickers?.length ? botData.config.tickers : ['RELIANCE.NS'];
+        setPredictionsLoading(true);
+        hftApiService.getPredictions(tickers, 'intraday')
+            .then((data) => setPredictions(data))
+            .catch(() => setPredictions(null))
+            .finally(() => setPredictionsLoading(false));
+    }, [botData?.config?.tickers?.join(',')]);
 
     const getPeriodDescription = (): string => {
         switch (timePeriod) {
@@ -499,6 +521,38 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
                     </div>
                 </ChartContainer>
             </ChartsSection>
+
+            {/* Vetting predictions (from same backend) */}
+            <ChartContainer>
+                <h3>Vetting predictions (Market Scan)</h3>
+                {predictionsLoading && <p style={{ color: '#666' }}>Loading…</p>}
+                {!predictionsLoading && predictions?.predictions?.length > 0 && (
+                    <div>
+                        {predictions.predictions.slice(0, 5).map((p: any) => (
+                            <PredictionsCard key={p.symbol || 'n/a'}>
+                                <h4>{p.symbol || 'N/A'}</h4>
+                                {p.error ? (
+                                    <div className="pred-row"><span style={{ color: '#c0392b' }}>{p.error}</span></div>
+                                ) : (
+                                    <>
+                                        <div className="pred-row">
+                                            <span>Signal</span>
+                                            <span className="pred-signal">{p.action || '—'}</span>
+                                        </div>
+                                        <div className="pred-row">
+                                            <span>Confidence</span>
+                                            <span>{p.confidence != null ? `${(Number(p.confidence) * 100).toFixed(1)}%` : '—'}</span>
+                                        </div>
+                                    </>
+                                )}
+                            </PredictionsCard>
+                        ))}
+                    </div>
+                )}
+                {!predictionsLoading && (!predictions?.predictions?.length) && predictions !== null && (
+                    <p style={{ color: '#888' }}>No predictions. Add symbols to watchlist or run Market Scan.</p>
+                )}
+            </ChartContainer>
         </DashboardContainer>
     );
 };
