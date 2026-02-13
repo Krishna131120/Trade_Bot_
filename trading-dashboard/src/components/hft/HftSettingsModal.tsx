@@ -231,7 +231,8 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
             const settingsToSave: any = {
                 mode: formData.mode,
                 riskLevel: formData.riskLevel,
-                maxAllocation: maxAllocationNum / 100
+                maxAllocation: maxAllocationNum / 100,
+                ...(formData.riskLevel === 'CUSTOM' && { stopLoss: stopLossPctNum / 100 })
             };
 
             console.log('Saving settings:', settingsToSave);
@@ -270,6 +271,11 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
                             <option value="paper">Paper Trading</option>
                             <option value="live">Live Trading</option>
                         </select>
+                        <small style={{ color: '#6c757d', fontSize: '0.85rem', marginTop: '6px', display: 'block' }}>
+                            {formData.mode === 'live'
+                                ? 'Live: real positions and prices from Dhan (run HFT2 backend with env).'
+                                : 'Paper: no positions shown (no stale data).'}
+                        </small>
                     </SettingGroup>
 
                     <SettingGroup>

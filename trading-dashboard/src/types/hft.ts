@@ -97,4 +97,5 @@ export interface HftSettingsUpdate {
     mode?: 'paper' | 'live';
     riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
     maxAllocation?: number;
+    stopLoss?: number;
 }

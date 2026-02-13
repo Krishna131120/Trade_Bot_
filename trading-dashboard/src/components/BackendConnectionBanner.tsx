@@ -39,7 +39,7 @@ const BackendConnectionBanner = ({ className = '' }: BackendConnectionBannerProp
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1">
                   <h3 className="text-red-100 font-bold text-sm mb-1">
-                    {connectionStatus === 'checking' ? 'Checking Backend Connection...' : 'Backend Server Offline'}
+                    {connectionStatus === 'checking' ? 'Checking Backend Connection...' : 'Backend'}
                   </h3>
                   <p className="text-red-200 text-xs mb-2">
                     {connectionState.error || 'Unable to connect to the backend server. Some features may not work.'}

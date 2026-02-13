@@ -7,7 +7,6 @@ import { HealthProvider } from './contexts/HealthContext';
 import { PortfolioProvider } from './contexts/PortfolioContext';
 import { ScenarioProvider } from './contexts/ScenarioContext';
 import { NotificationProvider } from './contexts/NotificationContext';
-import { GlobalOfflineIndicator } from './components/GlobalOfflineIndicator';
 import { AppRoutes } from './routes';
 import ErrorBoundary from './components/ErrorBoundary';
 import './App.css';
@@ -18,7 +17,6 @@ function App() {
       <BrowserRouter>
         <ThemeProvider>
           <BackendStatusProvider>
-            <GlobalOfflineIndicator />
             <ConnectionProvider>
               <HealthProvider>
                 <AuthProvider>

@@ -14,9 +14,10 @@ import type {
 } from '../types/hft';
 
 // Use same backend as main API (unified server); HFT routes are at /api/*
+// Try hft2 direct first (5001), then main backend proxy (8000)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_BACKEND_URL
     || import.meta.env.VITE_HFT_API_URL
-    || 'http://127.0.0.1:8000';
+    || 'http://127.0.0.1:5001';  // Direct to hft2 (or 8000 for proxy)
 
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({

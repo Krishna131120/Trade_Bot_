@@ -108,7 +108,7 @@ export const BackendStatus: React.FC<BackendStatusProps> = ({ className = '' }) 
           </>
         ) : (
           <>
-            <span className="font-semibold">Backend Offline</span>
+            <span className="font-semibold">Backend</span>
             {connectionState.isChecking && <RefreshCw size={14} className="animate-spin ml-1" />}
           </>
         )}
@@ -133,7 +133,7 @@ export const BackendStatus: React.FC<BackendStatusProps> = ({ className = '' }) 
                 <h2 className={`text-lg font-bold ${
                   isLight ? 'text-red-900' : 'text-red-100'
                 }`}>
-                  Backend Server Offline
+                  Connection
                 </h2>
               </div>
             </div>
@@ -143,7 +143,7 @@ export const BackendStatus: React.FC<BackendStatusProps> = ({ className = '' }) 
               <p className={`mb-4 font-medium ${
                 isLight ? 'text-gray-700' : 'text-gray-300'
               }`}>
-                The backend server is offline. Click below to copy the restart command.
+                Click below to copy the restart command.
               </p>
             
               <div className={`p-4 rounded-lg mb-4 overflow-x-auto ${

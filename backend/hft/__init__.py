@@ -1,1 +1,1 @@
-# HFT Bot Module - Integrated into main backend
+# HFT Bot API - integrated into main backend (unified server)

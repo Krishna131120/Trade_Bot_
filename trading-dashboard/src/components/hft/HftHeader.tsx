@@ -199,15 +199,15 @@ const HftHeader: React.FC<HftHeaderProps> = ({
                 <Title>💵 BlackHole Trading Bot</Title>
 
                 <HeaderControls>
-                    {/* Trading Mode Indicator */}
-                    {liveStatus && (
-                        <ModeIndicator mode={liveStatus.connected ? 'live' : 'paper'}>
+                    {/* Trading Mode Indicator: use saved mode so Live shows as soon as user selects it */}
+                    {(liveStatus || botData?.config) && (
+                        <ModeIndicator mode={(liveStatus?.mode || botData?.config?.mode || 'paper') === 'live' ? 'live' : 'paper'}>
                             <StatusDot
-                                mode={liveStatus.connected ? 'live' : 'paper'}
-                                $connected={liveStatus.connected || true}
+                                mode={(liveStatus?.mode || botData?.config?.mode || 'paper') === 'live' ? 'live' : 'paper'}
+                                $connected={(liveStatus?.mode || botData?.config?.mode) === 'live'}
                             />
                             <span>
-                                {liveStatus.connected ? 'Live Trading' : 'Paper Trading'}
+                                {(liveStatus?.mode || botData?.config?.mode || 'paper') === 'live' ? 'Live Trading' : 'Paper Trading'}
                             </span>
                         </ModeIndicator>
                     )}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
+import toast from 'react-hot-toast';
 import type { HftBotData, HftTrade } from '../../types/hft';
 import { formatCurrency, hftApiService } from '../../services/hftApiService';
 
@@ -82,7 +83,7 @@ const HoldingsTable = styled.div`
 
 const HoldingsHeader = styled.div`
   display: grid;
-  grid-template-columns: 1.5fr 0.8fr 1fr 1fr 1fr 1fr 1fr 0.8fr;
+  grid-template-columns: 1.5fr 0.8fr 1fr 1fr 1fr 1fr 1fr 0.8fr 1.2fr;
   gap: 10px;
   padding: 15px;
   background: linear-gradient(135deg, #3498db, #2980b9);
@@ -101,7 +102,7 @@ const HoldingsHeader = styled.div`
 
 const HoldingsRow = styled.div`
   display: grid;
-  grid-template-columns: 1.5fr 0.8fr 1fr 1fr 1fr 1fr 1fr 0.8fr;
+  grid-template-columns: 1.5fr 0.8fr 1fr 1fr 1fr 1fr 1fr 0.8fr 1.2fr;
   gap: 10px;
   padding: 15px;
   align-items: center;
@@ -329,18 +330,81 @@ const ActivityValues = styled.div`
   min-width: 120px;
 `;
 
+const ActionButtons = styled.div`
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+`;
+
+const OrderBtn = styled.button<{ $side: 'BUY' | 'SELL' }>`
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: ${p => p.$side === 'BUY' ? '#27ae60' : '#e74c3c'};
+  color: white;
+  &:hover { opacity: 0.9; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+`;
+
+const OrderModalOverlay = styled.div`
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+`;
+
+const OrderModalBox = styled.div`
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  min-width: 320px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+`;
+
+const OrderModalTitle = styled.h3`
+  margin: 0 0 16px 0;
+  color: #2c3e50;
+`;
+
+const OrderField = styled.div`
+  margin-bottom: 14px;
+  label { display: block; margin-bottom: 4px; font-weight: 600; color: #555; font-size: 0.9rem; }
+  input { width: 100%; padding: 8px 10px; border: 2px solid #e9ecef; border-radius: 6px; font-size: 1rem; box-sizing: border-box; }
+  input:focus { outline: none; border-color: #3498db; }
+`;
+
+const OrderModalActions = styled.div`
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  button { padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; }
+  .cancel { background: #95a5a6; color: white; }
+  .submit { background: #3498db; color: white; }
+  .submit:hover { background: #2980b9; }
+`;
+
 interface HftPortfolioProps {
     botData: HftBotData;
     onAddTicker: (ticker: string) => Promise<void>;
     onRemoveTicker: (ticker: string) => Promise<void>;
 }
 
+type OrderSide = 'BUY' | 'SELL';
 const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRemoveTicker }) => {
     const [subTab, setSubTab] = useState<'holdings' | 'activity' | 'watchlist'>('holdings');
     const [newTicker, setNewTicker] = useState('');
     const [loading, setLoading] = useState(false);
     const [tradeHistory, setTradeHistory] = useState<HftTrade[]>([]);
     const [lastUpdate, setLastUpdate] = useState(new Date());
+    const [orderModal, setOrderModal] = useState<{ open: boolean; symbol: string; side: OrderSide; quantity: string; stopLossPct: string }>({
+        open: false, symbol: '', side: 'BUY', quantity: '', stopLossPct: ''
+    });
 
     useEffect(() => {
         const fetchTradeHistory = async () => {
@@ -413,6 +477,35 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
         }
     };
 
+    const openOrderModal = (symbol: string, side: OrderSide) => {
+        setOrderModal({ open: true, symbol, side, quantity: '', stopLossPct: '' });
+    };
+
+    const closeOrderModal = () => {
+        setOrderModal(prev => ({ ...prev, open: false }));
+    };
+
+    const handlePlaceOrder = async () => {
+        const qty = parseInt(orderModal.quantity, 10);
+        if (!orderModal.symbol || isNaN(qty) || qty < 1) {
+            toast.error('Enter a valid quantity');
+            return;
+        }
+        setLoading(true);
+        try {
+            await hftApiService.placeOrder(orderModal.symbol, orderModal.side, qty, 'MARKET');
+            toast.success(`${orderModal.side} order placed for ${orderModal.symbol}`);
+            closeOrderModal();
+            const trades = await hftApiService.getTrades(50);
+            setTradeHistory(trades);
+        } catch (err) {
+            console.error('Place order error:', err);
+            toast.error('Failed to place order');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const calculatePortfolioPercentage = (currentValue: number, totalValue: number): string => {
         if (!totalValue || totalValue <= 0 || currentValue == null) {
             return '0.0';
@@ -464,6 +557,7 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                             <div>Current Price</div>
                                             <div>Profit/Loss</div>
                                             <div>% Portfolio</div>
+                                            <div>Actions</div>
                                         </HoldingsHeader>
                                         {Object.entries(holdings).map(([ticker, data]) => {
                                             const currentPrice = data.currentPrice || data.avgPrice || 0;
@@ -495,6 +589,10 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                                         </div>
                                                     </ProfitLoss>
                                                     <div>{portfolioPercentage}%</div>
+                                                    <ActionButtons>
+                                                        <OrderBtn $side="BUY" onClick={() => openOrderModal(ticker, 'BUY')} disabled={loading}>Buy</OrderBtn>
+                                                        <OrderBtn $side="SELL" onClick={() => openOrderModal(ticker, 'SELL')} disabled={loading}>Sell</OrderBtn>
+                                                    </ActionButtons>
                                                 </HoldingsRow>
                                             );
                                         })}
@@ -579,6 +677,41 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                     </TabPanel>
                 )}
             </TabBody>
+
+            {orderModal.open && (
+                <OrderModalOverlay onClick={closeOrderModal}>
+                    <OrderModalBox onClick={e => e.stopPropagation()}>
+                        <OrderModalTitle>{orderModal.side} {orderModal.symbol}</OrderModalTitle>
+                        <OrderField>
+                            <label>Quantity</label>
+                            <input
+                                type="number"
+                                min={1}
+                                value={orderModal.quantity}
+                                onChange={e => setOrderModal(prev => ({ ...prev, quantity: e.target.value }))}
+                                placeholder="Number of shares"
+                            />
+                        </OrderField>
+                        <OrderField>
+                            <label>Stop Loss % (optional)</label>
+                            <input
+                                type="number"
+                                min={0}
+                                step={0.1}
+                                value={orderModal.stopLossPct}
+                                onChange={e => setOrderModal(prev => ({ ...prev, stopLossPct: e.target.value }))}
+                                placeholder="e.g. 2"
+                            />
+                        </OrderField>
+                        <OrderModalActions>
+                            <button type="button" className="cancel" onClick={closeOrderModal}>Cancel</button>
+                            <button type="button" className="submit" onClick={handlePlaceOrder} disabled={loading}>
+                                {loading ? 'Placing...' : 'Place Order'}
+                            </button>
+                        </OrderModalActions>
+                    </OrderModalBox>
+                </OrderModalOverlay>
+            )}
         </PortfolioContainer>
     );
 };

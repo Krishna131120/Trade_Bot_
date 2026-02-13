@@ -27,6 +27,8 @@ import psutil
 import threading
 import uuid
 import time
+import asyncio
+import requests
 
 from core.mcp_adapter import MCPAdapter
 # JWT authentication removed - open access API
@@ -111,10 +113,65 @@ except Exception as e:
 # Initialize Live Price Validator
 price_validator = LivePriceValidator()
 
-# Import and register HFT routes
-from hft.routes import hft_router
-app.include_router(hft_router, prefix="/api", tags=["HFT Bot"])
-logger.info("HFT Bot routes registered at /api/*")
+# HFT: use cloned hft2 backend for real demat when HFT2_BACKEND_URL is set; else use in-repo stubs
+HFT2_BACKEND_URL = os.environ.get("HFT2_BACKEND_URL", "").rstrip("/")  # e.g. http://127.0.0.1:5001
+app.state.mcp_adapter = mcp_adapter
+
+if HFT2_BACKEND_URL:
+    # Real trades: proxy /api/* (except predictions & status) to hft2. Predictions stay here (vetting).
+    from fastapi import Response
+
+    @app.get("/api/predictions")
+    async def hft_predictions(request: Request, symbols: str = "RELIANCE.NS", horizon: str = "intraday"):
+        adapter = getattr(request.app.state, "mcp_adapter", None)
+        if not adapter:
+            return {"predictions": [], "message": "Vetting agent not available"}
+        try:
+            symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] or ["RELIANCE.NS"]
+            return adapter.predict(symbols=symbol_list, horizon=horizon)
+        except Exception as e:
+            logger.exception("HFT predictions from vetting agent failed")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/status")
+    async def hft_status():
+        return {"status": "healthy", "isRunning": False, "timestamp": datetime.now().isoformat()}
+
+    async def _proxy_to_hft2(request: Request, path: str) -> Response:
+        url = f"{HFT2_BACKEND_URL}/api/{path}"
+        if request.url.query:
+            url += "?" + request.url.query
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+        body = await request.body()
+        try:
+            resp = await asyncio.to_thread(
+                requests.request,
+                request.method,
+                url,
+                headers=headers,
+                data=body if body else None,
+                timeout=30,
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers={k: v for k, v in resp.headers.items() if k.lower() not in ("content-encoding", "transfer-encoding")},
+            )
+        except requests.RequestException as e:
+            logger.warning("HFT2 proxy error: %s", e)
+            raise HTTPException(status_code=502, detail=f"HFT2 backend unreachable: {e}")
+
+    @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def hft2_proxy(request: Request, path: str):
+        if path in ("predictions", "status") or path.startswith("predictions") or path.startswith("status"):
+            raise HTTPException(status_code=404, detail="Use direct /api/predictions or /api/status")
+        return await _proxy_to_hft2(request, path)
+
+    logger.info("HFT Bot: proxying to hft2 at %s (predictions from vetting)", HFT2_BACKEND_URL)
+else:
+    from hft.routes import hft_router
+    app.include_router(hft_router, prefix="/api", tags=["HFT Bot"])
+    logger.info("HFT Bot routes registered at /api/* (in-repo stubs)")
 
 # API request logging
 API_LOG_PATH = Path("data/logs/api_requests.jsonl")
