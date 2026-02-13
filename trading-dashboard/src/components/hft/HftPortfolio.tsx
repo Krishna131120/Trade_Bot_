@@ -3,6 +3,7 @@ import styled from 'styled-components';
 import toast from 'react-hot-toast';
 import type { HftBotData, HftTrade } from '../../types/hft';
 import { formatCurrency, hftApiService } from '../../services/hftApiService';
+import { useTheme } from '../../contexts/ThemeContext';
 
 const PortfolioContainer = styled.div`
   display: flex;
@@ -13,29 +14,37 @@ const PortfolioContainer = styled.div`
   overflow: hidden;
 `;
 
-const SubTabNav = styled.div`
+const SubTabNav = styled.div<{ $isLight: boolean }>`
   display: flex;
-  background: white;
+  background: ${props => props.$isLight ? 'white' : 'rgba(30, 41, 59, 0.5)'};
+  border: ${props => props.$isLight ? 'none' : '1px solid rgba(148, 163, 184, 0.1)'};
+  backdrop-filter: ${props => props.$isLight ? 'none' : 'blur(10px)'};
   border-radius: 10px;
   padding: 5px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
 `;
 
-const SubTabButton = styled.button<{ $active: boolean }>`
+const SubTabButton = styled.button<{ $active: boolean; $isLight: boolean }>`
   flex: 1;
-  background: ${props => props.$active ? '#3498db' : 'transparent'};
-  border: none;
+  background: ${props => props.$active
+        ? (props.$isLight ? '#3498db' : 'rgba(56, 189, 248, 0.2)')
+        : 'transparent'};
+  border: ${props => props.$active && !props.$isLight ? '1px solid rgba(56, 189, 248, 0.3)' : 'none'};
   padding: 12px 16px;
   border-radius: 8px;
   cursor: pointer;
   font-size: 1rem;
   transition: all 0.2s ease;
-  color: ${props => props.$active ? 'white' : '#7f8c8d'};
-  box-shadow: ${props => props.$active ? '0 2px 8px rgba(52, 152, 219, 0.25)' : 'none'};
+  color: ${props => props.$active
+        ? (props.$isLight ? 'white' : '#38bdf8')
+        : (props.$isLight ? '#7f8c8d' : '#94a3b8')};
+  box-shadow: ${props => props.$active && props.$isLight ? '0 2px 8px rgba(52, 152, 219, 0.25)' : 'none'};
 
   &:hover {
-    background: ${props => props.$active ? '#2980b9' : '#ecf0f1'};
-    color: #2c3e50;
+    background: ${props => props.$active
+        ? (props.$isLight ? '#2980b9' : 'rgba(56, 189, 248, 0.3)')
+        : (props.$isLight ? '#ecf0f1' : 'rgba(148, 163, 184, 0.1)')};
+    color: ${props => props.$isLight ? '#2c3e50' : '#e2e8f0'};
   }
 `;
 
@@ -58,40 +67,45 @@ const TabPanel = styled.div`
   padding-right: 6px;
 `;
 
-const Section = styled.div`
+const Section = styled.div<{ $isLight: boolean }>`
   h3 {
     margin-bottom: 15px;
-    color: #2c3e50;
+    color: ${props => props.$isLight ? '#2c3e50' : 'white'};
     border-bottom: 2px solid #3498db;
     padding-bottom: 5px;
   }
+  h4 {
+    color: ${props => props.$isLight ? '#2c3e50' : '#cbd5e1'};
+    margin-bottom: 10px;
+  }
 `;
 
-const HoldingsTable = styled.div`
-  background: #f8f9fa;
+const HoldingsTable = styled.div<{ $isLight: boolean }>`
+  background: ${props => props.$isLight ? '#f8f9fa' : 'rgba(15, 23, 42, 0.4)'};
   border-radius: 10px;
   overflow: hidden;
-  border: 1px solid #e9ecef;
+  border: 1px solid ${props => props.$isLight ? '#e9ecef' : 'rgba(51, 65, 85, 0.5)'};
   max-height: 80vh;
   overflow-y: auto;
 
   &::-webkit-scrollbar { width: 8px; }
-  &::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
-  &::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
-  &::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+  &::-webkit-scrollbar-track { background: ${props => props.$isLight ? '#f1f1f1' : 'rgba(15, 23, 42, 0.5)'}; border-radius: 4px; }
+  &::-webkit-scrollbar-thumb { background: ${props => props.$isLight ? '#c1c1c1' : 'rgba(71, 85, 105, 0.6)'}; border-radius: 4px; }
+  &::-webkit-scrollbar-thumb:hover { background: ${props => props.$isLight ? '#a8a8a8' : 'rgba(100, 116, 139, 0.8)'}; }
 `;
 
-const HoldingsHeader = styled.div`
+const HoldingsHeader = styled.div<{ $isLight: boolean }>`
   display: grid;
   grid-template-columns: 1.5fr 0.8fr 1fr 1fr 1fr 1fr 1fr 0.8fr 1.2fr;
   gap: 10px;
   padding: 15px;
-  background: linear-gradient(135deg, #3498db, #2980b9);
+  background: ${props => props.$isLight ? 'linear-gradient(135deg, #3498db, #2980b9)' : 'linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(30, 41, 59, 0.8))'};
   color: white;
   font-weight: bold;
   font-size: 0.9rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  border-bottom: 1px solid ${props => props.$isLight ? 'transparent' : 'rgba(56, 189, 248, 0.2)'};
 
   @media (max-width: 768px) {
     grid-template-columns: 1fr 0.8fr 1fr 1fr;
@@ -100,18 +114,23 @@ const HoldingsHeader = styled.div`
   }
 `;
 
-const HoldingsRow = styled.div`
+const HoldingsRow = styled.div<{ $isLight: boolean }>`
   display: grid;
   grid-template-columns: 1.5fr 0.8fr 1fr 1fr 1fr 1fr 1fr 0.8fr 1.2fr;
   gap: 10px;
   padding: 15px;
   align-items: center;
-  border-bottom: 1px solid #e9ecef;
-  background: white;
+  border-bottom: 1px solid ${props => props.$isLight ? '#e9ecef' : 'rgba(51, 65, 85, 0.5)'};
+  background: ${props => props.$isLight ? 'white' : 'transparent'};
+  color: ${props => props.$isLight ? 'inherit' : '#e2e8f0'};
   transition: all 0.2s ease;
 
   &:last-child { border-bottom: none; }
-  &:hover { background: #f8f9fa; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  &:hover { 
+    background: ${props => props.$isLight ? '#f8f9fa' : 'rgba(30, 41, 59, 0.6)'}; 
+    transform: translateY(-1px); 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+  }
 
   @media (max-width: 768px) {
     grid-template-columns: 1fr 0.8fr 1fr 1fr;
@@ -201,13 +220,16 @@ const WatchlistControls = styled.div`
   @media(max-width: 768px) { flex-direction: column; }
 `;
 
-const TickerInput = styled.input`
+const TickerInput = styled.input<{ $isLight: boolean }>`
   flex: 1;
   padding: 10px;
-  border: 2px solid #e9ecef;
+  border: 2px solid ${props => props.$isLight ? '#e9ecef' : 'rgba(51, 65, 85, 0.5)'};
+  background: ${props => props.$isLight ? 'white' : 'rgba(15, 23, 42, 0.6)'};
+  color: ${props => props.$isLight ? 'inherit' : 'white'};
   border-radius: 6px;
   font-size: 1rem;
   &:focus { outline: none; border-color: #3498db; }
+  &::placeholder { color: ${props => props.$isLight ? '#999' : '#64748b'}; }
 `;
 
 const AddButton = styled.button`
@@ -230,9 +252,10 @@ const WatchlistGrid = styled.div`
   @media(max-width: 768px) { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 `;
 
-const WatchlistItem = styled.div`
-  background: #3498db;
-  color: white;
+const WatchlistItem = styled.div<{ $isLight: boolean }>`
+  background: ${props => props.$isLight ? '#3498db' : 'rgba(56, 189, 248, 0.2)'};
+  border: ${props => props.$isLight ? 'none' : '1px solid rgba(56, 189, 248, 0.3)'};
+  color: ${props => props.$isLight ? 'white' : '#38bdf8'};
   padding: 10px;
   border-radius: 6px;
   text-align: center;
@@ -241,6 +264,7 @@ const WatchlistItem = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
+  backdrop-filter: blur(4px);
 `;
 
 const RemoveButton = styled.button`
@@ -269,17 +293,17 @@ const NoHoldings = styled.div`
   padding: 20px;
 `;
 
-const ActivitySection = styled.div`
-  background: #f8f9fa;
+const ActivitySection = styled.div<{ $isLight: boolean }>`
+  background: ${props => props.$isLight ? '#f8f9fa' : 'rgba(15, 23, 42, 0.4)'};
   padding: 20px;
   border-radius: 10px;
-  border: 1px solid #e9ecef;
+  border: 1px solid ${props => props.$isLight ? '#e9ecef' : 'rgba(51, 65, 85, 0.5)'};
   display: flex;
   flex-direction: column;
   min-height: 200px;
 `;
 
-const ActivityList = styled.div`
+const ActivityList = styled.div<{ $isLight: boolean }>`
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
@@ -288,15 +312,16 @@ const ActivityList = styled.div`
   padding-right: 8px;
   margin-right: -8px;
   &::-webkit-scrollbar { width: 8px; }
-  &::-webkit-scrollbar-track { background: #f8f9fa; border-radius: 4px; border: 1px solid #e9ecef; }
-  &::-webkit-scrollbar-thumb { background: #6c757d; border-radius: 4px; border: 1px solid #dee2e6; }
-  &::-webkit-scrollbar-thumb:hover { background: #495057; }
+  &::-webkit-scrollbar-track { background: ${props => props.$isLight ? '#f8f9fa' : 'rgba(15, 23, 42, 0.5)'}; border-radius: 4px; border: 1px solid ${props => props.$isLight ? '#e9ecef' : 'rgba(51, 65, 85, 0.3)'}; }
+  &::-webkit-scrollbar-thumb { background: ${props => props.$isLight ? '#6c757d' : 'rgba(71, 85, 105, 0.6)'}; border-radius: 4px; border: 1px solid ${props => props.$isLight ? '#dee2e6' : 'rgba(100, 116, 139, 0.3)'}; }
+  &::-webkit-scrollbar-thumb:hover { background: ${props => props.$isLight ? '#495057' : 'rgba(100, 116, 139, 0.8)'}; }
   scrollbar-width: thin;
-  scrollbar-color: #6c757d #f8f9fa;
+  scrollbar-color: ${props => props.$isLight ? '#6c757d #f8f9fa' : '#475569 #0f172a'};
 `;
 
-const ActivityItem = styled.div<{ type: string }>`
-  background: white;
+const ActivityItem = styled.div<{ type: string; $isLight: boolean }>`
+  background: ${props => props.$isLight ? 'white' : 'rgba(30, 41, 59, 0.6)'};
+  color: ${props => props.$isLight ? 'inherit' : '#e2e8f0'};
   padding: 16px;
   margin-bottom: 10px;
   border-radius: 8px;
@@ -319,9 +344,9 @@ const ActivityTitle = styled.div<{ type: string }>`
   font-size: 0.95rem;
 `;
 
-const ActivityTime = styled.div`
+const ActivityTime = styled.div<{ $isLight: boolean }>`
   font-size: 0.9rem;
-  color: #666;
+  color: ${props => props.$isLight ? '#666' : '#94a3b8'};
 `;
 
 const ActivityValues = styled.div`
@@ -357,25 +382,43 @@ const OrderModalOverlay = styled.div`
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  backdrop-filter: blur(2px);
 `;
 
-const OrderModalBox = styled.div`
-  background: white;
+const OrderModalBox = styled.div<{ $isLight: boolean }>`
+  background: ${props => props.$isLight ? 'white' : '#1e293b'};
+  color: ${props => props.$isLight ? 'inherit' : 'white'};
+  border: 1px solid ${props => props.$isLight ? 'transparent' : '#334155'};
   border-radius: 12px;
   padding: 24px;
   min-width: 320px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
 `;
 
-const OrderModalTitle = styled.h3`
+const OrderModalTitle = styled.h3<{ $isLight: boolean }>`
   margin: 0 0 16px 0;
-  color: #2c3e50;
+  color: ${props => props.$isLight ? '#2c3e50' : 'white'};
 `;
 
-const OrderField = styled.div`
+const OrderField = styled.div<{ $isLight: boolean }>`
   margin-bottom: 14px;
-  label { display: block; margin-bottom: 4px; font-weight: 600; color: #555; font-size: 0.9rem; }
-  input { width: 100%; padding: 8px 10px; border: 2px solid #e9ecef; border-radius: 6px; font-size: 1rem; box-sizing: border-box; }
+  label { 
+    display: block; 
+    margin-bottom: 4px; 
+    font-weight: 600; 
+    color: ${props => props.$isLight ? '#555' : '#cbd5e1'}; 
+    font-size: 0.9rem; 
+  }
+  input { 
+    width: 100%; 
+    padding: 8px 10px; 
+    border: 2px solid ${props => props.$isLight ? '#e9ecef' : '#475569'}; 
+    background: ${props => props.$isLight ? 'white' : '#0f172a'};
+    color: ${props => props.$isLight ? 'inherit' : 'white'};
+    border-radius: 6px; 
+    font-size: 1rem; 
+    box-sizing: border-box; 
+  }
   input:focus { outline: none; border-color: #3498db; }
 `;
 
@@ -396,7 +439,11 @@ interface HftPortfolioProps {
 }
 
 type OrderSide = 'BUY' | 'SELL';
+
 const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRemoveTicker }) => {
+    const { theme } = useTheme();
+    const isLight = theme === 'light';
+
     const [subTab, setSubTab] = useState<'holdings' | 'activity' | 'watchlist'>('holdings');
     const [newTicker, setNewTicker] = useState('');
     const [loading, setLoading] = useState(false);
@@ -519,14 +566,14 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
 
     return (
         <PortfolioContainer>
-            <SubTabNav>
-                <SubTabButton $active={subTab === 'holdings'} onClick={() => setSubTab('holdings')}>
+            <SubTabNav $isLight={isLight}>
+                <SubTabButton $active={subTab === 'holdings'} $isLight={isLight} onClick={() => setSubTab('holdings')}>
                     <i className="fas fa-briefcase" style={{ marginRight: 8 }}></i> Current Holdings
                 </SubTabButton>
-                <SubTabButton $active={subTab === 'activity'} onClick={() => setSubTab('activity')}>
+                <SubTabButton $active={subTab === 'activity'} $isLight={isLight} onClick={() => setSubTab('activity')}>
                     <i className="fas fa-history" style={{ marginRight: 8 }}></i> Recent Trading Activity
                 </SubTabButton>
-                <SubTabButton $active={subTab === 'watchlist'} onClick={() => setSubTab('watchlist')}>
+                <SubTabButton $active={subTab === 'watchlist'} $isLight={isLight} onClick={() => setSubTab('watchlist')}>
                     <i className="fas fa-list" style={{ marginRight: 8 }}></i> Watchlist
                 </SubTabButton>
             </SubTabNav>
@@ -534,7 +581,7 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
             <TabBody>
                 {subTab === 'holdings' && (
                     <TabPanel>
-                        <Section>
+                        <Section $isLight={isLight}>
                             <h3>Current Holdings</h3>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                                 <RealTimeIndicator>
@@ -545,10 +592,10 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                 </LastUpdateTime>
                             </div>
 
-                            <HoldingsTable>
+                            <HoldingsTable $isLight={isLight}>
                                 {Object.keys(holdings).length > 0 ? (
                                     <>
-                                        <HoldingsHeader>
+                                        <HoldingsHeader $isLight={isLight}>
                                             <div>Stock Symbol</div>
                                             <div>Status</div>
                                             <div>Last Trade</div>
@@ -571,7 +618,7 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                             const lastTradeType = getLastTradeType(ticker);
                                             const status = qty > 0 ? (profitLoss >= 0 ? 'PROFIT' : 'LOSS') : 'ACTIVE';
                                             return (
-                                                <HoldingsRow key={ticker}>
+                                                <HoldingsRow key={ticker} $isLight={isLight}>
                                                     <TickerName>{ticker}</TickerName>
                                                     <div>
                                                         <StatusBadge status={status}>{status}</StatusBadge>
@@ -607,10 +654,10 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
 
                 {subTab === 'activity' && (
                     <TabPanel>
-                        <Section>
+                        <Section $isLight={isLight}>
                             <h3>Recent Trading Activity</h3>
-                            <ActivitySection>
-                                <ActivityList>
+                            <ActivitySection $isLight={isLight}>
+                                <ActivityList $isLight={isLight}>
                                     {tradeHistory && tradeHistory.length > 0 ? (
                                         tradeHistory.slice(0, 50).map((trade, index) => {
                                             const action = trade.action.toUpperCase();
@@ -620,10 +667,10 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                             const d = new Date(trade.timestamp);
                                             const formatted = `${d.toLocaleDateString('en-IN')} ${d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
                                             return (
-                                                <ActivityItem key={`act-${index}-${trade.symbol}-${trade.timestamp}`} type={action}>
+                                                <ActivityItem key={`act-${index}-${trade.symbol}-${trade.timestamp}`} type={action} $isLight={isLight}>
                                                     <ActivityDetails>
                                                         <ActivityTitle type={action}>{action} {displayAsset}</ActivityTitle>
-                                                        <ActivityTime>{formatted}</ActivityTime>
+                                                        <ActivityTime $isLight={isLight}>{formatted}</ActivityTime>
                                                     </ActivityDetails>
                                                     <ActivityValues>
                                                         <div><strong>Qty:</strong> {qty}</div>
@@ -634,7 +681,7 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                             );
                                         })
                                     ) : (
-                                        <div style={{ textAlign: 'center', color: '#7f8c8d', fontStyle: 'italic', padding: '20px', background: 'white', borderRadius: '8px', border: '2px dashed #e9ecef' }}>
+                                        <div style={{ textAlign: 'center', color: '#7f8c8d', fontStyle: 'italic', padding: '20px', background: isLight ? 'white' : 'rgba(30, 41, 59, 0.4)', borderRadius: '8px', border: isLight ? '2px dashed #e9ecef' : '2px dashed rgba(148, 163, 184, 0.2)' }}>
                                             No recent trades
                                         </div>
                                     )}
@@ -646,10 +693,11 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
 
                 {subTab === 'watchlist' && (
                     <TabPanel>
-                        <Section>
+                        <Section $isLight={isLight}>
                             <h3>Watchlist Management</h3>
                             <WatchlistControls>
                                 <TickerInput
+                                    $isLight={isLight}
                                     type="text"
                                     placeholder="Add Ticker (e.g., INFY.NS)"
                                     value={newTicker}
@@ -663,10 +711,10 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                             </WatchlistControls>
 
                             <div>
-                                <h4 style={{ color: '#2c3e50', marginBottom: 10 }}>Current Watchlist:</h4>
+                                <h4 style={{ marginBottom: 10 }}>Current Watchlist:</h4>
                                 <WatchlistGrid>
                                     {botData.config.tickers.map(ticker => (
-                                        <WatchlistItem key={ticker}>
+                                        <WatchlistItem key={ticker} $isLight={isLight}>
                                             {ticker}
                                             <RemoveButton onClick={() => handleRemoveTicker(ticker)}>×</RemoveButton>
                                         </WatchlistItem>
@@ -680,9 +728,9 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
 
             {orderModal.open && (
                 <OrderModalOverlay onClick={closeOrderModal}>
-                    <OrderModalBox onClick={e => e.stopPropagation()}>
-                        <OrderModalTitle>{orderModal.side} {orderModal.symbol}</OrderModalTitle>
-                        <OrderField>
+                    <OrderModalBox onClick={e => e.stopPropagation()} $isLight={isLight}>
+                        <OrderModalTitle $isLight={isLight}>{orderModal.side} {orderModal.symbol}</OrderModalTitle>
+                        <OrderField $isLight={isLight}>
                             <label>Quantity</label>
                             <input
                                 type="number"
@@ -692,7 +740,7 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                 placeholder="Number of shares"
                             />
                         </OrderField>
-                        <OrderField>
+                        <OrderField $isLight={isLight}>
                             <label>Stop Loss % (optional)</label>
                             <input
                                 type="number"
