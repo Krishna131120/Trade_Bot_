@@ -299,6 +299,41 @@ class MCPAdapter:
                 "predictions": predictions
             }
             
+            # Inject DataStatus for frontend compatibility
+            # Derived from the first prediction's validation data if available
+            db_status = "CACHED_YAHOO_FINANCE"
+            freshness = 0
+            market = "NORMAL"
+            
+            if predictions and "price_metadata" in predictions[0]:
+                meta = predictions[0]["price_metadata"]
+                if meta.get("price_source") == "yahoo_finance_live":
+                    db_status = "REALTIME_YAHOO_FINANCE"
+                    
+                # Calculate freshness in seconds
+                if "price_timestamp" in meta:
+                    try:
+                        pt = datetime.fromisoformat(meta["price_timestamp"])
+                        freshness = (datetime.now() - pt).total_seconds()
+                    except:
+                        pass
+                        
+                if meta.get("market_state") == "CLOSED":
+                    market = "MARKET_CLOSED"
+                elif meta.get("market_state") == "PRE" or meta.get("market_state") == "POST":
+                    market = "EVENT_WINDOW"
+                    
+            data_status_obj = {
+                "data_source": db_status,
+                "data_freshness_seconds": int(freshness),
+                "market_context": market
+            }
+            
+            # Add to each prediction if not present
+            for p in predictions:
+                if "data_status" not in p:
+                    p["data_status"] = data_status_obj
+            
             duration_ms = (time.time() - start_time) * 1000
             self._log_response(request_id, response, duration_ms)
             
