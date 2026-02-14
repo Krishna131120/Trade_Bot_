@@ -5,6 +5,9 @@ Unified server: vetting agent at /tools/*, HFT Bot at /api/*.
 
 import logging
 import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Optional, List, Any
 from datetime import datetime, timedelta
 import random
@@ -15,6 +18,10 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 hft_router = APIRouter()
+
+# When Start Bot is used without HFT2_BACKEND_URL, optionally start hft2 processes (web_backend, fyers) so logs show in Render.
+_hft2_processes: List[subprocess.Popen] = []
+_hft2_backend_dir = Path(__file__).resolve().parent.parent / "hft2" / "backend"
 
 
 # ---------- Pydantic models ----------
@@ -210,8 +217,63 @@ async def watchlist_bulk(body: WatchlistBulkBody):
 
 
 # ---------- Bot control ----------
+def _start_hft2_stack() -> None:
+    """Start fyers_data_service and web_backend (uses testindia) so they run and log to Render."""
+    global _hft2_processes
+    if not _hft2_backend_dir.is_dir():
+        logger.info("HFT2 backend dir not found at %s, skipping subprocess start", _hft2_backend_dir)
+        return
+    if _hft2_processes:
+        logger.info("HFT2 processes already running (%s), skipping", len(_hft2_processes))
+        return
+    env = os.environ.copy()
+    env.setdefault("FYERS_ALLOW_MOCK", "true")
+    try:
+        # Fyers data service (port 8002) - stdout/stderr inherit so logs show in Render
+        p1 = subprocess.Popen(
+            [sys.executable, "fyers_data_service.py", "--port", "8002"],
+            cwd=str(_hft2_backend_dir),
+            env=env,
+            stdout=None,
+            stderr=None,
+        )
+        _hft2_processes.append(p1)
+        logger.info("Started fyers_data_service (PID %s)", p1.pid)
+        # Web backend (port 5000) - imports and uses testindia.py; output in Render logs
+        p2 = subprocess.Popen(
+            [sys.executable, "web_backend.py", "--port", "5000"],
+            cwd=str(_hft2_backend_dir),
+            env=env,
+            stdout=None,
+            stderr=None,
+        )
+        _hft2_processes.append(p2)
+        logger.info("Started web_backend (PID %s)", p2.pid)
+    except Exception as e:
+        logger.warning("Failed to start HFT2 stack: %s", e)
+
+
+def _stop_hft2_stack() -> None:
+    """Terminate started hft2 subprocesses."""
+    global _hft2_processes
+    for p in _hft2_processes:
+        try:
+            p.terminate()
+            p.wait(timeout=10)
+        except Exception as e:
+            logger.warning("Error stopping HFT2 process %s: %s", p.pid, e)
+            try:
+                p.kill()
+            except Exception:
+                pass
+    _hft2_processes.clear()
+    logger.info("HFT2 stack stopped")
+
+
 @hft_router.post("/bot/start")
 async def start_bot():
+    if not os.environ.get("HFT2_BACKEND_URL"):
+        _start_hft2_stack()
     bot_state["isRunning"] = True
     logger.info("HFT Bot started")
     return {"status": "success", "message": "Bot started", "isRunning": True}
@@ -219,6 +281,7 @@ async def start_bot():
 
 @hft_router.post("/bot/stop")
 async def stop_bot():
+    _stop_hft2_stack()
     bot_state["isRunning"] = False
     logger.info("HFT Bot stopped")
     return {"status": "success", "message": "Bot stopped", "isRunning": False}
