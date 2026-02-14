@@ -3,6 +3,7 @@ HFT Bot API routes - integrated into main backend.
 Unified server: vetting agent at /tools/*, HFT Bot at /api/*.
 """
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -21,7 +22,10 @@ hft_router = APIRouter()
 
 # When Start Bot is used without HFT2_BACKEND_URL, optionally start hft2 processes (web_backend, fyers) so logs show in Render.
 _hft2_processes: List[subprocess.Popen] = []
-_hft2_backend_dir = Path(__file__).resolve().parent.parent / "hft2" / "backend"
+_hft2_stream_threads: List[Any] = []  # keep refs so threads don't get GC'd
+# HFT2_BACKEND_DIR: optional env override on Render (e.g. backend/hft2/backend from repo root, or absolute path)
+_default_hft2_dir = (Path(__file__).resolve().parent.parent / "hft2" / "backend").resolve()
+_hft2_backend_dir = Path(os.environ.get("HFT2_BACKEND_DIR", str(_default_hft2_dir))).resolve()
 
 
 # ---------- Pydantic models ----------
@@ -217,40 +221,74 @@ async def watchlist_bulk(body: WatchlistBulkBody):
 
 
 # ---------- Bot control ----------
+def _pipe_subprocess_log(name: str, pipe: Any, _process: subprocess.Popen) -> None:
+    """Read subprocess stdout/stderr line by line and log with prefix so Render shows HFT2 output."""
+    import threading
+    try:
+        for line in iter(pipe.readline, ""):
+            if not line:
+                break
+            line = line.rstrip()
+            if line:
+                logger.info("[%s] %s", name, line)
+    except Exception as e:
+        logger.warning("[%s] pipe read error: %s", name, e)
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 def _start_hft2_stack() -> None:
-    """Start fyers_data_service and web_backend (uses testindia) so they run and log to Render."""
-    global _hft2_processes
+    """Start fyers_data_service and web_backend (uses testindia); pipe their output to backend logs for Render."""
+    global _hft2_processes, _hft2_stream_threads
+    _hft2_stream_threads.clear()
     if not _hft2_backend_dir.is_dir():
-        logger.info("HFT2 backend dir not found at %s, skipping subprocess start", _hft2_backend_dir)
+        logger.warning("HFT2 backend dir not found at %s - Start Bot will not run testindia/web_backend", _hft2_backend_dir)
         return
     if _hft2_processes:
         logger.info("HFT2 processes already running (%s), skipping", len(_hft2_processes))
         return
     env = os.environ.copy()
     env.setdefault("FYERS_ALLOW_MOCK", "true")
+    env["PYTHONUNBUFFERED"] = "1"
+    cwd = str(_hft2_backend_dir)
+    logger.info("HFT2 Start Bot: starting stack at %s", cwd)
     try:
-        # Fyers data service (port 8002) - stdout/stderr inherit so logs show in Render
+        import threading
+        # Fyers data service (port 8002) - pipe output so it appears in Render logs
         p1 = subprocess.Popen(
-            [sys.executable, "fyers_data_service.py", "--port", "8002"],
-            cwd=str(_hft2_backend_dir),
+            [sys.executable, "-u", "fyers_data_service.py", "--port", "8002"],
+            cwd=cwd,
             env=env,
-            stdout=None,
-            stderr=None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
         _hft2_processes.append(p1)
-        logger.info("Started fyers_data_service (PID %s)", p1.pid)
-        # Web backend (port 5000) - imports and uses testindia.py; output in Render logs
+        t1 = threading.Thread(target=_pipe_subprocess_log, args=("fyers", p1.stdout, p1), daemon=True)
+        t1.start()
+        _hft2_stream_threads.append(t1)
+        logger.info("Started fyers_data_service (PID %s) - output will stream to logs", p1.pid)
+        # Web backend (port 5000) - imports testindia.py; pipe output so predictions/analysis show in Render
         p2 = subprocess.Popen(
-            [sys.executable, "web_backend.py", "--port", "5000"],
-            cwd=str(_hft2_backend_dir),
+            [sys.executable, "-u", "web_backend.py", "--port", "5000"],
+            cwd=cwd,
             env=env,
-            stdout=None,
-            stderr=None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
         _hft2_processes.append(p2)
-        logger.info("Started web_backend (PID %s)", p2.pid)
+        t2 = threading.Thread(target=_pipe_subprocess_log, args=("web_backend", p2.stdout, p2), daemon=True)
+        t2.start()
+        _hft2_stream_threads.append(t2)
+        logger.info("Started web_backend (PID %s) - testindia/output will stream to logs", p2.pid)
     except Exception as e:
-        logger.warning("Failed to start HFT2 stack: %s", e)
+        logger.exception("Failed to start HFT2 stack: %s", e)
 
 
 def _stop_hft2_stack() -> None:
@@ -270,12 +308,50 @@ def _stop_hft2_stack() -> None:
     logger.info("HFT2 stack stopped")
 
 
+async def _hft2_sync_watchlist_and_predict() -> None:
+    """After HFT2 stack starts: wait for web_backend, sync watchlist, trigger predict so Render logs show activity."""
+    import requests
+    await asyncio.sleep(8)
+    base = "http://127.0.0.1:5000"
+    for _ in range(15):
+        try:
+            r = requests.get(f"{base}/api/health", timeout=3)
+            if r.status_code == 200:
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    else:
+        logger.warning("HFT2 web_backend did not become ready; skipping watchlist sync and predict")
+        return
+    tickers = list(bot_state.get("config", {}).get("tickers") or [])
+    if not tickers:
+        logger.info("HFT2 sync: no watchlist tickers")
+        return
+    logger.info("HFT2 syncing watchlist and triggering predict for %s", tickers)
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: requests.post(f"{base}/api/watchlist/bulk", json={"tickers": tickers, "action": "ADD"}, timeout=15),
+        )
+        await loop.run_in_executor(
+            None,
+            lambda: requests.post(f"{base}/api/mcp/predict", json={"symbols": tickers}, timeout=180),
+        )
+        logger.info("HFT2 watchlist synced and predict triggered for %s", tickers)
+    except Exception as e:
+        logger.warning("HFT2 sync/predict failed: %s", e)
+
+
 @hft_router.post("/bot/start")
 async def start_bot():
+    logger.info("Start Bot requested (HFT2_BACKEND_URL=%s)", "set" if os.environ.get("HFT2_BACKEND_URL") else "not set")
     if not os.environ.get("HFT2_BACKEND_URL"):
         _start_hft2_stack()
+        asyncio.create_task(_hft2_sync_watchlist_and_predict())
     bot_state["isRunning"] = True
-    logger.info("HFT Bot started")
+    logger.info("HFT Bot started (isRunning=True)")
     return {"status": "success", "message": "Bot started", "isRunning": True}
 
 
