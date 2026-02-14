@@ -6,6 +6,7 @@ No Fyers dependency; currentPrice comes from Dhan position data (unrealized P&L)
 import os
 import logging
 import urllib.request
+import urllib.error
 import json
 from typing import Any, Dict, List, Optional
 
@@ -31,10 +32,23 @@ def _dhan_request(method: str, path: str, token: str, **kwargs: Any) -> Any:
         req.data = json.dumps(kwargs["data"]).encode("utf-8")
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read().decode())
+            raw = r.read().decode()
+            out = json.loads(raw)
+            # Some brokers wrap in {"data": ...} or {"status": "success", "data": ...}
+            if isinstance(out, dict) and "data" in out:
+                out = out["data"]
+            return out
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()[:500]
+        except Exception:
+            pass
+        logger.warning("Dhan API %s %s HTTP %s: %s", method, path, e.code, body or str(e))
+        raise RuntimeError(f"Dhan API {path}: HTTP {e.code} - {body or str(e)}") from e
     except Exception as e:
         logger.warning("Dhan API %s %s failed: %s", method, path, e)
-        return None
+        raise
 
 
 def _fetch_fund_limit(token: str) -> Optional[Dict]:
@@ -44,12 +58,20 @@ def _fetch_fund_limit(token: str) -> Optional[Dict]:
 
 def _fetch_holdings(token: str) -> List[Dict]:
     out = _dhan_request("GET", "/holdings", token)
-    return out if isinstance(out, list) else []
+    if isinstance(out, list):
+        return out
+    if isinstance(out, dict) and "data" in out and isinstance(out["data"], list):
+        return out["data"]
+    return []
 
 
 def _fetch_positions(token: str) -> List[Dict]:
     out = _dhan_request("GET", "/positions", token)
-    return out if isinstance(out, list) else []
+    if isinstance(out, list):
+        return out
+    if isinstance(out, dict) and "data" in out and isinstance(out["data"], list):
+        return out["data"]
+    return []
 
 
 def _nse_symbol(s: str, segment: str = "") -> str:
@@ -72,8 +94,8 @@ def get_live_portfolio() -> Optional[Dict]:
         holdings_list = _fetch_holdings(token)
         positions_list = _fetch_positions(token)
     except Exception as e:
-        logger.error("Dhan API error: %s", e)
-        return None
+        logger.info("Dhan API error (check token/network): %s", e)
+        raise
 
     cash = 0.0
     if fund and "availabelBalance" in fund:

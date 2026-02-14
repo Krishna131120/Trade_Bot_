@@ -39,6 +39,8 @@ export interface HftBotData {
     config: HftBotConfig;
     isRunning: boolean;
     chatMessages: HftChatMessage[];
+    /** Set when Live mode + Dhan configured but portfolio fetch failed (e.g. token/network). */
+    dhan_error?: string;
 }
 
 export interface HftChatMessage {
@@ -52,6 +54,8 @@ export interface HftLiveStatus {
     mode?: string;
     lastUpdate?: string;
     dhan_configured?: boolean;
+    /** Error from last Dhan portfolio fetch when in Live mode. */
+    dhan_error?: string | null;
     broker?: string;
     account?: string;
     lastSync?: string;

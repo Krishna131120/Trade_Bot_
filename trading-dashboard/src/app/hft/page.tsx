@@ -243,6 +243,11 @@ export default function HftPage() {
                             <p className={`text-xs md:text-sm ${textMuted}`}>
                                 Updated {new Date().toLocaleTimeString()}
                             </p>
+                            {mode === 'live' && (botData as any).dhan_error && (
+                                <p className="text-xs mt-1 text-amber-500 dark:text-amber-400">
+                                    Dhan fetch failed: {(botData as any).dhan_error}
+                                </p>
+                            )}
                         </div>
                         <button
                             onClick={refreshData}

@@ -4,6 +4,7 @@ Unified server: vetting agent at /tools/*, HFT Bot at /api/*.
 """
 
 import logging
+import os
 from typing import Optional, List, Any
 from datetime import datetime, timedelta
 import random
@@ -89,6 +90,10 @@ bot_state = {
     "chatMessages": [],
 }
 
+# After cold start (e.g. Render), use live mode if env is set so Dhan is fetched without re-saving Settings.
+if os.environ.get("HFT_DEFAULT_MODE", "").strip().lower() == "live":
+    bot_state["config"]["mode"] = "live"
+
 
 # ---------- Health & status ----------
 @hft_router.get("/health")
@@ -106,15 +111,24 @@ async def status():
 
 
 # ---------- Dhan live (optional; uses env only - works on Render when DHAN_ACCESS_TOKEN set) ----------
+_last_dhan_error: Optional[str] = None
+
+
 def _get_dhan_live_portfolio():
     """When mode is live and env has Dhan credentials, return real portfolio; else None."""
+    global _last_dhan_error
     try:
         import dhan_live
         if not getattr(dhan_live, "get_dhan_token", None) or not dhan_live.get_dhan_token():
+            _last_dhan_error = None
             return None
-        return dhan_live.get_live_portfolio()
+        out = dhan_live.get_live_portfolio()
+        if out is not None:
+            _last_dhan_error = None
+        return out
     except Exception as e:
-        logger.debug("dhan_live not available or failed: %s", e)
+        _last_dhan_error = str(e)
+        logger.warning("dhan_live get_live_portfolio failed: %s", e)
         return None
 
 
@@ -136,11 +150,16 @@ def _hft_portfolio():
 
 @hft_router.get("/bot-data")
 async def get_bot_data():
-    return {
+    portfolio = _hft_portfolio()
+    mode = bot_state.get("config", {}).get("mode", "paper")
+    payload = {
         **bot_state,
         "isRunning": bot_state["isRunning"],
-        "portfolio": _hft_portfolio(),
+        "portfolio": portfolio,
     }
+    if mode == "live" and _last_dhan_error and (not portfolio or portfolio.get("totalValue", 0) == 0):
+        payload["dhan_error"] = _last_dhan_error
+    return payload
 
 
 @hft_router.get("/portfolio")
@@ -262,6 +281,7 @@ async def get_live_status():
         "mode": mode,
         "lastUpdate": datetime.now().isoformat(),
         "dhan_configured": dhan_configured,
+        "dhan_error": _last_dhan_error if (mode == "live" and _last_dhan_error) else None,
     }
 
 

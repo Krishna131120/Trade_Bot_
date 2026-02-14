@@ -30,6 +30,7 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
     });
     const [loading, setLoading] = useState(false);
     const [dhanConfigured, setDhanConfigured] = useState<boolean | null>(null);
+    const [dhanError, setDhanError] = useState<string | null>(null);
 
     useEffect(() => {
         if (settings) {
@@ -45,8 +46,13 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
     useEffect(() => {
         let cancelled = false;
         hftApiService.getLiveStatus()
-            .then((res) => { if (!cancelled) setDhanConfigured(res.dhan_configured ?? false); })
-            .catch(() => { if (!cancelled) setDhanConfigured(false); });
+            .then((res) => {
+                if (!cancelled) {
+                    setDhanConfigured(res.dhan_configured ?? false);
+                    setDhanError(res.dhan_error ?? null);
+                }
+            })
+            .catch(() => { if (!cancelled) { setDhanConfigured(false); setDhanError(null); } });
         return () => { cancelled = true; };
     }, []);
 
@@ -204,6 +210,12 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
                                         <span>Dhan credentials: Not configured. Set DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in backend environment.</span>
                                     </>
                                 )}
+                            </div>
+                        )}
+                        {formData.mode === 'live' && dhanError && (
+                            <div className="mt-2 px-3 py-2 rounded-lg text-sm bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                <span className="font-medium">Fetch error: </span>
+                                <span>{dhanError}</span>
                             </div>
                         )}
                     </div>
