@@ -105,9 +105,26 @@ async def status():
     }
 
 
+# ---------- Dhan live (optional; uses env only - works on Render when DHAN_ACCESS_TOKEN set) ----------
+def _get_dhan_live_portfolio():
+    """When mode is live and env has Dhan credentials, return real portfolio; else None."""
+    try:
+        import dhan_live
+        if not getattr(dhan_live, "get_dhan_token", None) or not dhan_live.get_dhan_token():
+            return None
+        return dhan_live.get_live_portfolio()
+    except Exception as e:
+        logger.debug("dhan_live not available or failed: %s", e)
+        return None
+
+
 # ---------- Bot data & portfolio ----------
 def _hft_portfolio():
-    """Paper: no stale data. Live: run HFT2 with Dhan for real data; here return empty."""
+    """Paper: empty. Live: use Dhan from env if available (single-backend / Render)."""
+    if bot_state.get("config", {}).get("mode") == "live":
+        live = _get_dhan_live_portfolio()
+        if live is not None:
+            return live
     return {
         "totalValue": 0,
         "cash": 0,
@@ -232,10 +249,19 @@ async def chat(message: ChatMessage):
 # ---------- Live status & sync ----------
 @hft_router.get("/live-status")
 async def get_live_status():
+    mode = bot_state["config"]["mode"]
+    dhan_configured = False
+    if mode == "live":
+        try:
+            import dhan_live
+            dhan_configured = bool(getattr(dhan_live, "get_dhan_token", None) and dhan_live.get_dhan_token())
+        except Exception:
+            pass
     return {
         "connected": bot_state["isRunning"],
-        "mode": bot_state["config"]["mode"],
+        "mode": mode,
         "lastUpdate": datetime.now().isoformat(),
+        "dhan_configured": dhan_configured,
     }
 
 

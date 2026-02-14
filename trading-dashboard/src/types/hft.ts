@@ -49,6 +49,9 @@ export interface HftChatMessage {
 
 export interface HftLiveStatus {
     connected: boolean;
+    mode?: string;
+    lastUpdate?: string;
+    dhan_configured?: boolean;
     broker?: string;
     account?: string;
     lastSync?: string;

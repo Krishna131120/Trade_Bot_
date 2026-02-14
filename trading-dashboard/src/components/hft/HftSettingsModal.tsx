@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { X } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle } from 'lucide-react';
+import { hftApiService } from '../../services/hftApiService';
 import type { HftSettingsUpdate } from '../../types/hft';
 
 interface SettingsFormData {
@@ -28,6 +29,7 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
         stopLossPct: 5
     });
     const [loading, setLoading] = useState(false);
+    const [dhanConfigured, setDhanConfigured] = useState<boolean | null>(null);
 
     useEffect(() => {
         if (settings) {
@@ -39,6 +41,14 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
             });
         }
     }, [settings]);
+
+    useEffect(() => {
+        let cancelled = false;
+        hftApiService.getLiveStatus()
+            .then((res) => { if (!cancelled) setDhanConfigured(res.dhan_configured ?? false); })
+            .catch(() => { if (!cancelled) setDhanConfigured(false); });
+        return () => { cancelled = true; };
+    }, []);
 
     const handleInputChange = (field: keyof SettingsFormData, value: any) => {
         setFormData(prev => {
@@ -176,9 +186,26 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
                         </select>
                         <p className={`text-xs mt-2 ${textMuted}`}>
                             {formData.mode === 'live'
-                                ? 'Live: real positions and prices from Dhan (run HFT2 backend with env).'
+                                ? 'Live: real positions and prices from Dhan. Set DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in backend env (e.g. Render).'
                                 : 'Paper: no positions shown (no stale data).'}
                         </p>
+                        {formData.mode === 'live' && (
+                            <div className={`flex items-center gap-2 mt-2 px-3 py-2 rounded-lg text-sm ${dhanConfigured === null ? textMuted : dhanConfigured ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}>
+                                {dhanConfigured === null ? (
+                                    <span>Checking Dhan credentials…</span>
+                                ) : dhanConfigured ? (
+                                    <>
+                                        <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                                        <span>Dhan credentials: Configured</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                                        <span>Dhan credentials: Not configured. Set DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID in backend environment.</span>
+                                    </>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {/* Risk Level */}
