@@ -275,7 +275,7 @@ def _start_hft2_stack() -> None:
         logger.info("HFT2 processes already running (%s), skipping", len(_hft2_processes))
         return
     env = os.environ.copy()
-    env.setdefault("FYERS_ALLOW_MOCK", "true")
+    # Use Render/env Fyers credentials as-is; set FYERS_ALLOW_MOCK=true only if you want mock data
     env["PYTHONUNBUFFERED"] = "1"
     cwd = str(_hft2_backend_dir)
     logger.info("HFT2 Start Bot: starting stack at %s", cwd)
@@ -296,9 +296,9 @@ def _start_hft2_stack() -> None:
         t1.start()
         _hft2_stream_threads.append(t1)
         logger.info("Started fyers_data_service (PID %s) - output will stream to logs", p1.pid)
-        # Web backend (port 5000) - imports testindia.py; pipe output so predictions/analysis show in Render
+        # Web backend (port 5000) - imports testindia.py; bind 0.0.0.0 so health check reaches it
         p2 = subprocess.Popen(
-            [sys.executable, "-u", "web_backend.py", "--port", "5000"],
+            [sys.executable, "-u", "web_backend.py", "--host", "0.0.0.0", "--port", "5000"],
             cwd=cwd,
             env=env,
             stdout=subprocess.PIPE,
@@ -335,18 +335,18 @@ def _stop_hft2_stack() -> None:
 async def _hft2_sync_watchlist_and_predict() -> None:
     """After HFT2 stack starts: wait for web_backend, sync watchlist, trigger predict so Render logs show activity."""
     import requests
-    await asyncio.sleep(8)
+    await asyncio.sleep(15)  # web_backend can be slow (initialize_bot, heavy imports)
     base = "http://127.0.0.1:5000"
-    for _ in range(15):
+    for _ in range(30):  # up to 60s more
         try:
-            r = requests.get(f"{base}/api/health", timeout=3)
+            r = requests.get(f"{base}/api/health", timeout=5)
             if r.status_code == 200:
                 break
         except Exception:
             pass
         await asyncio.sleep(2)
     else:
-        logger.warning("HFT2 web_backend did not become ready; skipping watchlist sync and predict")
+        logger.warning("HFT2 web_backend did not become ready in time; check [web_backend] logs above for startup errors")
         return
     tickers = list(bot_state.get("config", {}).get("tickers") or [])
     if not tickers:

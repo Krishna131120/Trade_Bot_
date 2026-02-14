@@ -514,7 +514,11 @@ class FyersDataService:
 
                     logger.info(f"Updated data for {len(new_data)} symbols")
                 else:
-                    logger.warning("No data received from fetch")
+                    # In mock mode with empty watchlist this is normal; avoid log spam on Render
+                    if self.allow_mock_mode:
+                        logger.debug("No data received from fetch (mock mode, watchlist may be empty)")
+                    else:
+                        logger.warning("No data received from fetch")
 
                 # Wait for next update
                 await asyncio.sleep(self.update_interval)
