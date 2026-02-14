@@ -23,9 +23,29 @@ hft_router = APIRouter()
 # When Start Bot is used without HFT2_BACKEND_URL, optionally start hft2 processes (web_backend, fyers) so logs show in Render.
 _hft2_processes: List[subprocess.Popen] = []
 _hft2_stream_threads: List[Any] = []  # keep refs so threads don't get GC'd
-# HFT2_BACKEND_DIR: optional env override on Render (e.g. backend/hft2/backend from repo root, or absolute path)
-_default_hft2_dir = (Path(__file__).resolve().parent.parent / "hft2" / "backend").resolve()
-_hft2_backend_dir = Path(os.environ.get("HFT2_BACKEND_DIR", str(_default_hft2_dir))).resolve()
+# HFT2_BACKEND_DIR: optional env override on Render. If relative, resolved from backend dir (not cwd).
+_backend_dir = (Path(__file__).resolve().parent.parent)  # .../backend
+_default_hft2_dir = (_backend_dir / "hft2" / "backend").resolve()
+_env_hft2 = os.environ.get("HFT2_BACKEND_DIR")
+if _env_hft2:
+    _p = Path(_env_hft2)
+    if _p.is_absolute():
+        _hft2_backend_dir = _p.resolve()
+    else:
+        # "backend/hft2/backend" on Render: use parent of _backend_dir + rest of path so we get .../backend/hft2/backend
+        _parts = _p.parts
+        if _parts and _parts[0] == "backend":
+            _base = _backend_dir.parent
+            _hft2_backend_dir = (_base / Path(*_parts[1:])).resolve()
+        else:
+            _hft2_backend_dir = (_backend_dir / _p).resolve()
+else:
+    _hft2_backend_dir = _default_hft2_dir
+# Render often runs with backend/ as root so __file__ is .../backend/backend/hft/routes.py; try one level up if missing
+if not _hft2_backend_dir.is_dir() and _backend_dir.parent:
+    _fallback = (_backend_dir.parent / "hft2" / "backend").resolve()
+    if _fallback.is_dir():
+        _hft2_backend_dir = _fallback
 
 
 # ---------- Pydantic models ----------
