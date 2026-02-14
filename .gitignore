@@ -60,5 +60,5 @@ trading-dashboard/build/
 # Git
 .git-rewrite/
 
-# Legacy HFT (now integrated into backend/hft/)
-hft2/
+# HFT2 code is in backend/hft2/ and is tracked. Only ignore the secrets file:
+backend/hft2/env

@@ -14,20 +14,25 @@ logger = logging.getLogger(__name__)
 
 
 def get_dhan_token() -> Optional[str]:
-    return os.environ.get("DHAN_ACCESS_TOKEN") or os.environ.get("DHAN_ACCESS_TOKEN_KEY")
+    """Return token stripped of whitespace (Render env can have trailing newline when pasted)."""
+    raw = os.environ.get("DHAN_ACCESS_TOKEN") or os.environ.get("DHAN_ACCESS_TOKEN_KEY") or ""
+    t = raw.strip()
+    return t if t else None
 
 
 def get_dhan_client_id() -> Optional[str]:
-    return os.environ.get("DHAN_CLIENT_ID")
+    """Return client ID stripped (must match the account that generated the token)."""
+    raw = os.environ.get("DHAN_CLIENT_ID") or ""
+    t = raw.strip()
+    return t if t else None
 
 
-def _dhan_request(method: str, path: str, token: str, **kwargs: Any) -> Any:
+def _dhan_request(method: str, path: str, token: str, client_id: Optional[str] = None, **kwargs: Any) -> Any:
     url = f"https://api.dhan.co/v2{path}"
-    req = urllib.request.Request(
-        url,
-        method=method,
-        headers={"Content-Type": "application/json", "access-token": token},
-    )
+    headers = {"Content-Type": "application/json", "access-token": token}
+    if client_id:
+        headers["dhanClientId"] = str(client_id)
+    req = urllib.request.Request(url, method=method, headers=headers)
     if kwargs.get("data"):
         req.data = json.dumps(kwargs["data"]).encode("utf-8")
     try:
@@ -45,19 +50,25 @@ def _dhan_request(method: str, path: str, token: str, **kwargs: Any) -> Any:
         except Exception:
             pass
         logger.warning("Dhan API %s %s HTTP %s: %s", method, path, e.code, body or str(e))
+        if e.code == 401:
+            raise RuntimeError(
+                "Dhan token invalid or expired (DH-901). "
+                "Generate a new token at web.dhan.co → My Profile → Access DhanHQ APIs, "
+                "then set DHAN_ACCESS_TOKEN in Render Environment. Tokens expire (e.g. 24h)."
+            ) from e
         raise RuntimeError(f"Dhan API {path}: HTTP {e.code} - {body or str(e)}") from e
     except Exception as e:
         logger.warning("Dhan API %s %s failed: %s", method, path, e)
         raise
 
 
-def _fetch_fund_limit(token: str) -> Optional[Dict]:
-    out = _dhan_request("GET", "/fundlimit", token)
+def _fetch_fund_limit(token: str, client_id: Optional[str] = None) -> Optional[Dict]:
+    out = _dhan_request("GET", "/fundlimit", token, client_id=client_id)
     return out if isinstance(out, dict) else None
 
 
-def _fetch_holdings(token: str) -> List[Dict]:
-    out = _dhan_request("GET", "/holdings", token)
+def _fetch_holdings(token: str, client_id: Optional[str] = None) -> List[Dict]:
+    out = _dhan_request("GET", "/holdings", token, client_id=client_id)
     if isinstance(out, list):
         return out
     if isinstance(out, dict) and "data" in out and isinstance(out["data"], list):
@@ -65,8 +76,8 @@ def _fetch_holdings(token: str) -> List[Dict]:
     return []
 
 
-def _fetch_positions(token: str) -> List[Dict]:
-    out = _dhan_request("GET", "/positions", token)
+def _fetch_positions(token: str, client_id: Optional[str] = None) -> List[Dict]:
+    out = _dhan_request("GET", "/positions", token, client_id=client_id)
     if isinstance(out, list):
         return out
     if isinstance(out, dict) and "data" in out and isinstance(out["data"], list):
@@ -89,10 +100,11 @@ def get_live_portfolio() -> Optional[Dict]:
     token = get_dhan_token()
     if not token:
         return None
+    client_id = get_dhan_client_id()
     try:
-        fund = _fetch_fund_limit(token)
-        holdings_list = _fetch_holdings(token)
-        positions_list = _fetch_positions(token)
+        fund = _fetch_fund_limit(token, client_id)
+        holdings_list = _fetch_holdings(token, client_id)
+        positions_list = _fetch_positions(token, client_id)
     except Exception as e:
         logger.info("Dhan API error (check token/network): %s", e)
         raise
