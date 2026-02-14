@@ -32,20 +32,24 @@ if _env_hft2:
     if _p.is_absolute():
         _hft2_backend_dir = _p.resolve()
     else:
-        # "backend/hft2/backend" on Render: use parent of _backend_dir + rest of path so we get .../backend/hft2/backend
+        # "backend/hft2/backend": strip leading "backend/" and resolve rest under _backend_dir -> .../backend/hft2/backend
         _parts = _p.parts
         if _parts and _parts[0] == "backend":
-            _base = _backend_dir.parent
-            _hft2_backend_dir = (_base / Path(*_parts[1:])).resolve()
+            _hft2_backend_dir = (_backend_dir / Path(*_parts[1:])).resolve()
         else:
             _hft2_backend_dir = (_backend_dir / _p).resolve()
 else:
     _hft2_backend_dir = _default_hft2_dir
-# Render often runs with backend/ as root so __file__ is .../backend/backend/hft/routes.py; try one level up if missing
-if not _hft2_backend_dir.is_dir() and _backend_dir.parent:
-    _fallback = (_backend_dir.parent / "hft2" / "backend").resolve()
-    if _fallback.is_dir():
-        _hft2_backend_dir = _fallback
+# Render: try fallbacks when path missing (e.g. root=backend so _backend_dir=.../src, path .../src/hft2/backend missing; try .../src/backend/hft2/backend)
+if not _hft2_backend_dir.is_dir():
+    for _candidate in (
+        _backend_dir / "backend" / "hft2" / "backend",  # root=backend: .../src/backend/hft2/backend
+        _backend_dir.parent / "backend" / "hft2" / "backend" if _backend_dir.parent else Path(),
+        _backend_dir.parent / "hft2" / "backend" if _backend_dir.parent else Path(),
+    ):
+        if _candidate and _candidate.resolve().is_dir():
+            _hft2_backend_dir = _candidate.resolve()
+            break
 
 
 # ---------- Pydantic models ----------
