@@ -1,9 +1,11 @@
+# Deploy the hft2 web backend (login, MongoDB, JWT). Uses minimal requirements so Render build succeeds.
 services:
   - type: web
     name: trade-bot-backend
     runtime: python
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: bash backend/render_start.sh
+    buildCommand: pip install -r backend/hft2/backend/requirements-minimal.txt
+    startCommand: bash backend/hft2/backend/render_start.sh
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0
+      # Set in Render dashboard: MONGODB_URI, JWT_SECRET

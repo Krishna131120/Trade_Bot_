@@ -6,7 +6,7 @@ Self-improving trading system using reinforcement learning
 import logging
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 import asyncio
@@ -30,6 +30,16 @@ except ImportError:
         class Env:
             pass
     spaces = None
+    # Stub nn for type hints when torch is not available
+    class nn:
+        class Module:
+            pass
+        @staticmethod
+        def Sequential(*args):
+            pass
+        @staticmethod
+        def Linear(*args):
+            pass
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +233,7 @@ class DQNAgent:
         # Update target network
         self.update_target_network()
 
-    def _build_network(self) -> nn.Module:
+    def _build_network(self):
         """Build neural network for Q-learning"""
         return nn.Sequential(
             nn.Linear(self.state_size, 128),

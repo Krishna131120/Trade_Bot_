@@ -34,7 +34,7 @@ const SignupPage = () => {
     try {
       await signup(username, password, email);
       showNotification('success', 'Account Created', 'Your account has been created successfully!');
-      navigate('/login');
+      navigate('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Signup failed. Please try again.');
       showNotification('error', 'Signup Failed', err.message || 'Signup failed. Please try again.');
@@ -44,14 +44,15 @@ const SignupPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 flex items-center justify-center p-4">
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl p-8 w-full max-w-md border border-white/20">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-500 rounded-full mb-4">
-            <TrendingUp className="w-8 h-8 text-white" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-500 rounded-full mb-4">
+            <TrendingUp className="w-8 h-8 text-slate-900" />
           </div>
-          <h1 className="text-3xl font-bold text-white mb-2">Create Account</h1>
-          <p className="text-gray-300">Start your trading journey</p>
+          <h1 className="text-2xl font-bold text-amber-400 mb-1">Samruddhi Trading Hub</h1>
+          <h2 className="text-2xl font-bold text-white mb-2">Create Account</h2>
+          <p className="text-gray-300">Start your trading journey — data saved securely</p>
         </div>
 
         {error && (

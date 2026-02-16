@@ -29,6 +29,7 @@ export class TimeoutError extends Error {
 let isBackendOnline = true;
 let connectionCheckInProgress = false;
 
+// API client for web_backend (port 5000) - auth, health, etc.
 const api = axios.create({
   baseURL: config.API_BASE_URL,
   headers: {
@@ -36,6 +37,17 @@ const api = axios.create({
   },
   timeout: 480000, // 8 minutes - first run on Render can take 4–6 min (fetch + features + model)
   withCredentials: false, // CORS is handled by backend
+});
+
+// API client for api_server (port 8000) - predictions, market scan
+const PREDICTION_API_URL = import.meta.env.VITE_PREDICTION_API_URL || 'http://127.0.0.1:8000';
+const predictionApi = axios.create({
+  baseURL: PREDICTION_API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  timeout: 480000,
+  withCredentials: false,
 });
 
 // Add token to requests if available
@@ -111,8 +123,7 @@ api.interceptors.response.use(
 
       const baseURL = config.API_BASE_URL;
       return Promise.reject(new Error(
-        `Unable to connect to backend server at ${baseURL}. ` +
-        `Please ensure the backend is running.`
+        `Cannot reach backend at ${baseURL}. Start HFT2 backend: cd backend\\hft2\\backend then run "python run_hft2.py". Check the terminal for "Started web_backend (5000)" and open ${baseURL}/docs to verify.`
       ));
     }
 
@@ -181,51 +192,44 @@ api.interceptors.response.use(
   }
 );
 
-// Auth API
+// Auth API – wired to hft2 backend (POST /api/auth/login, /api/auth/register, GET /api/auth/status)
 export const authAPI = {
   login: async (username: string, password: string) => {
-    // Check if auth endpoint exists first
     try {
-      const response = await api.post('/auth/login', { username, password });
-      return response.data;
+      const response = await api.post('/api/auth/login', { username, password });
+      const data = response.data as { access_token?: string; token_type?: string; username?: string };
+      if (data.access_token) {
+        return { success: true, token: data.access_token, username: data.username || username };
+      }
+      return { success: false, error: 'No token in response' };
     } catch (error: any) {
-      // If 404, auth is disabled - return success with no-auth token
       if (error.response?.status === 404) {
-        return {
-          success: true,
-          username: username || 'anonymous',
-          token: 'no-auth-required',
-          message: 'Authentication is disabled - open access mode'
-        };
+        return { success: true, username: username || 'anonymous', token: 'no-auth-required', message: 'Auth disabled' };
       }
       throw error;
     }
   },
-  signup: async () => {
-    throw new Error('Signup is not supported. This backend does not have user registration. Please contact administrator for account creation.');
+  signup: async (username: string, password: string, _email?: string) => {
+    try {
+      const response = await api.post('/api/auth/register', { username, password });
+      const data = response.data as { access_token?: string; username?: string };
+      if (data.access_token) {
+        return { success: true, token: data.access_token, username: data.username || username };
+      }
+      return { success: true, message: 'Account created. Please login.' };
+    } catch (error: any) {
+      const msg = error.response?.data?.detail || error.message;
+      throw new Error(Array.isArray(msg) ? msg[0]?.msg || String(msg) : msg || 'Signup failed');
+    }
   },
   logout: async () => {
-    // Call backend logout endpoint to clear session
-    try {
-      const response = await api.post('/auth/logout');
-      return response.data;
-    } catch (error: any) {
-      // If 404, auth is disabled - just return success
-      if (error.response?.status === 404) {
-        return {
-          success: true,
-          message: 'Logout successful'
-        };
-      }
-      throw error;
-    }
+    return { success: true, message: 'Logout successful' };
   },
   checkStatus: async () => {
     try {
-      const response = await api.get('/auth/status');
-      return response.data;
-    } catch (error) {
-      // Return unauthenticated on error
+      const response = await api.get('/api/auth/status');
+      return response.data as { auth_status: string; authenticated?: boolean; username?: string };
+    } catch {
       return { authenticated: false, auth_status: 'enabled' };
     }
   },
@@ -257,7 +261,8 @@ export const stockAPI = {
       log('Calling /tools/predict (async + poll)...', payload);
       try {
       // Use async endpoint: start job then poll (no long-held request = no timeout)
-      const startResp = await api.post('/tools/predict/async', payload, { timeout: 60000 });
+      // Use predictionApi (port 8000) for /tools/predict endpoints
+      const startResp = await predictionApi.post('/tools/predict/async', payload, { timeout: 60000 });
       const jobId = startResp.data?.job_id;
       if (!jobId) throw new Error('Backend did not return job_id');
       log('Predict job started:', jobId);
@@ -266,7 +271,7 @@ export const stockAPI = {
       const pollTimeoutMs = 45000;
       const maxPolls = 150; // ~30 min
       for (let i = 0; i < maxPolls; i++) {
-        const pollResp = await api.get(`/tools/predict/result/${jobId}`, { timeout: pollTimeoutMs });
+        const pollResp = await predictionApi.get(`/tools/predict/result/${jobId}`, { timeout: pollTimeoutMs });
         if (pollResp.status === 404) throw new Error('Prediction job expired or not found');
         if (pollResp.status === 200) {
           responseData = pollResp.data;
@@ -367,7 +372,7 @@ export const stockAPI = {
     if (stopLossPct !== undefined) payload.stop_loss_pct = stopLossPct;
     if (capitalRiskPct !== undefined) payload.capital_risk_pct = capitalRiskPct;
 
-    const response = await api.post('/tools/scan_all', payload);
+    const response = await predictionApi.post('/tools/scan_all', payload);
     return response.data;
   },
 
@@ -381,7 +386,7 @@ export const stockAPI = {
     const key = `analyze_${symbol}_${horizons.join(',')}`;
     
     return requestDeduplicator.deduplicate(key, async () => {
-      const response = await api.post('/tools/analyze', {
+      const response = await predictionApi.post('/tools/analyze', {
         symbol,
         horizons,
         stop_loss_pct: stopLossPct,
@@ -398,7 +403,7 @@ export const stockAPI = {
     includeFeatures: boolean = false,
     refresh: boolean = false
   ) => {
-    const response = await api.post('/tools/fetch_data', {
+    const response = await predictionApi.post('/tools/fetch_data', {
       symbols,
       period,
       include_features: includeFeatures,
@@ -408,12 +413,12 @@ export const stockAPI = {
   },
 
   calculateFeatures: async (symbols: string[]) => {
-    const response = await api.post('/tools/calculate_features', { symbols });
+    const response = await predictionApi.post('/tools/calculate_features', { symbols });
     return response.data;
   },
 
   trainModels: async (symbols: string[], horizon: string = 'intraday') => {
-    const response = await api.post('/tools/train_models', { symbols, horizon });
+    const response = await predictionApi.post('/tools/train_models', { symbols, horizon });
     return response.data;
   },
 
@@ -469,7 +474,7 @@ export const stockAPI = {
     // If undefined, omit the field entirely (backend will use default None)
 
     try {
-      const response = await api.post('/tools/feedback', payload);
+      const response = await predictionApi.post('/tools/feedback', payload);
       return response.data;
     } catch (error: any) {
       throw error;
@@ -482,7 +487,7 @@ export const stockAPI = {
     nEpisodes: number = 10,
     forceRetrain: boolean = false
   ) => {
-    const response = await api.post('/tools/train_rl', {
+    const response = await predictionApi.post('/tools/train_rl', {
       symbol,
       horizon,
       n_episodes: nEpisodes,
@@ -493,7 +498,7 @@ export const stockAPI = {
 
   listModels: async () => {
     try {
-      const response = await api.get('/tools/models');
+      const response = await predictionApi.get('/tools/models');
       return response.data;
     } catch (error: any) {
       // If endpoint doesn't exist, return empty list
@@ -506,7 +511,8 @@ export const stockAPI = {
 
   health: async (retries: number = 2): Promise<any> => {
     try {
-      const response = await api.get('/tools/health', {
+      // Use /api/health for web_backend (port 5000)
+      const response = await api.get('/api/health', {
         timeout: 25000, // 25s — backend may be busy with prediction
       });
       return response.data;
@@ -529,8 +535,8 @@ export const stockAPI = {
     connectionCheckInProgress = true;
 
     try {
-      // Use the api instance for consistency - this ensures CORS and other configs are applied
-      const response = await api.get('/', {
+      // Use /api/health instead of / to avoid 404 errors (root route tries to serve HTML file that doesn't exist)
+      const response = await api.get('/api/health', {
         timeout: 10000, // 10 seconds for connection check (increased from 5)
       });
 
@@ -570,7 +576,7 @@ export const stockAPI = {
   },
 
   getRateLimitStatus: async () => {
-    const response = await api.get('/auth/status');
+    const response = await api.get('/api/auth/status');
     return response.data;
   },
 };
@@ -700,12 +706,20 @@ export const educationalAPI = {
 // User Settings API - ❌ NOT IMPLEMENTED IN BACKEND
 // Backend has NO /api/user/settings endpoints
 // Use localStorage for settings persistence
+// User profile – stored in backend MongoDB (trading.profiles)
 export const userAPI = {
   getSettings: async () => {
-    throw new Error('User settings endpoint not available. Backend does not implement /api/user/settings. Use localStorage.');
+    const response = await api.get('/api/user/profile');
+    const data = response.data as { username?: string; fullName?: string; email?: string; preferences?: Record<string, unknown> };
+    return { settings: { fullName: data.fullName, email: data.email, preferences: data.preferences }, ...data };
   },
-  saveSettings: async () => {
-    throw new Error('Save settings endpoint not available. Backend does not implement /api/user/settings. Use localStorage.');
+  saveSettings: async (profile: { fullName?: string; email?: string; username?: string; preferences?: Record<string, unknown> }) => {
+    const response = await api.post('/api/user/profile', {
+      fullName: profile.fullName,
+      email: profile.email,
+      preferences: profile.preferences,
+    });
+    return response.data as { success: boolean; message?: string };
   },
 };
 

@@ -5,7 +5,7 @@ import { TrendingUp } from 'lucide-react';
 import { useNotification } from '../contexts/NotificationContext';
 
 const LoginPage = () => {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,7 +19,7 @@ const LoginPage = () => {
     setLoading(true);
 
     try {
-      await login(email, password);
+      await login(username, password);
       showNotification('success', 'Login Successful', 'Welcome to your trading dashboard!');
       // Navigate to dashboard after successful login
       navigate('/dashboard');
@@ -33,14 +33,15 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center p-3 sm:p-4">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl p-6 sm:p-8 w-full max-w-sm border border-white/20">
         <div className="text-center mb-6 sm:mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 bg-blue-500 rounded-full mb-3 sm:mb-4">
-            <TrendingUp className="w-7 h-7 sm:w-8 sm:h-8 text-white" />
+          <div className="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 bg-amber-500 rounded-full mb-3 sm:mb-4">
+            <TrendingUp className="w-7 h-7 sm:w-8 sm:h-8 text-slate-900" />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white mb-1 sm:mb-2">Welcome Back</h1>
-          <p className="text-sm sm:text-base text-gray-300">Sign in to your trading account</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-amber-400 mb-1 sm:mb-2">Samruddhi Trading Hub</h1>
+          <h2 className="text-lg sm:text-xl font-semibold text-white mb-1 sm:mb-2">Welcome Back</h2>
+          <p className="text-sm sm:text-base text-gray-300">Sign in to your account</p>
         </div>
 
         {error && (
@@ -52,15 +53,15 @@ const LoginPage = () => {
         <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-6">
           <div>
             <label className="block text-xs sm:text-sm font-medium text-gray-300 mb-1.5 sm:mb-2">
-              Email
+              Username
             </label>
             <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               required
               className="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-white/5 border border-white/10 rounded-lg text-sm sm:text-base text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Enter your email"
+              placeholder="Enter your username"
             />
           </div>
 
@@ -97,11 +98,7 @@ const LoginPage = () => {
         </div>
 
         <div className="mt-4 sm:mt-6 text-center text-xs text-gray-400">
-          <p className="mb-0.5 sm:mb-1">Demo Credentials (if auth enabled):</p>
-          <p>Email: admin@example.com | Password: admin123</p>
-          <p className="mt-2 text-xs text-gray-500">
-            Note: Backend may be running in open access mode. You can use any credentials.
-          </p>
+          <p>Your credentials are stored securely. Use the account you created to sign in.</p>
         </div>
       </div>
     </div>

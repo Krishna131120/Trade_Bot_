@@ -26,7 +26,8 @@ export const BackendStatusProvider: React.FC<{ children: React.ReactNode }> = ({
     const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s when backend may be busy
 
     try {
-      const response = await fetch(`${config.API_BASE_URL}/tools/health`, { signal: controller.signal });
+      // Web backend (5000) exposes /api/health; api_server (8000) has /tools/health
+      const response = await fetch(`${config.API_BASE_URL}/api/health`, { signal: controller.signal });
       clearTimeout(timeoutId);
       const isOnline = response.ok;
       setState({

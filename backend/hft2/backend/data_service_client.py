@@ -82,23 +82,35 @@ class DataServiceClient:
         }
 
     def health_check(self) -> bool:
-        """Check if data service is healthy"""
+        """Check if data service is healthy. Returns False on timeout/error (non-blocking)."""
+        # Skip if health check is already in progress to avoid blocking
+        with self._health_check_lock:
+            if self._health_check_in_progress:
+                return self.is_healthy  # Return last known state
+            self._health_check_in_progress = True
+        
         try:
-            response = self.session.get(f"{self.base_url}/health", timeout=5)
+            # Use shorter timeout to avoid blocking health endpoint
+            response = self.session.get(f"{self.base_url}/health", timeout=2)
             if response.status_code == 200:
                 health_data = response.json()
                 # Accept both 'healthy' and 'degraded' as working states
                 service_status = health_data.get('status', 'unavailable')
                 self.is_healthy = service_status in ['healthy', 'degraded']
                 self.last_health_check = datetime.now()
-                logger.info(f"Data service health check: {service_status} (healthy={self.is_healthy})")
+                logger.debug(f"Data service health check: {service_status} (healthy={self.is_healthy})")
                 return self.is_healthy
             else:
                 self.is_healthy = False
-                logger.warning(f"Health check failed with status {response.status_code}")
+                logger.debug(f"Health check failed with status {response.status_code}")
                 return False
+        except requests.exceptions.Timeout:
+            # Timeout is not critical - just log at debug level
+            logger.debug(f"Data service health check timeout (service may be busy)")
+            return self.is_healthy  # Return last known state instead of False
         except Exception as e:
-            logger.warning(f"Health check failed: {e}")
+            # Only log warnings for actual errors, not timeouts
+            logger.debug(f"Data service health check error: {e}")
             self.is_healthy = False
             return False
         finally:

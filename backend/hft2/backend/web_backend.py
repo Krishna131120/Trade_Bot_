@@ -15,6 +15,7 @@ import time
 import traceback
 import socket
 import subprocess
+import platform
 import asyncio
 
 # Fix import paths permanently - MOVED TO TOP
@@ -40,7 +41,8 @@ logger.addHandler(handler)
 # Import FastAPI components with fallback handling
 try:
     import uvicorn
-    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+    from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -56,7 +58,12 @@ except ImportError as e:
 # Load environment variables from .env early so config/env fallbacks work
 try:
     from dotenv import load_dotenv
+    from pathlib import Path as _Path
     load_dotenv()
+    # Also load backend/hft2/env when run from backend/hft2/backend (standalone or via run_hft2)
+    _env_file = _Path(__file__).resolve().parent.parent / "env"
+    if _env_file.exists():
+        load_dotenv(_env_file)
     logger.debug("Loaded .env into environment")
 except Exception:
     logger.debug("python-dotenv not available or .env not loaded")
@@ -253,21 +260,20 @@ except ImportError as e:
     logger.error(f"Error importing configuration schema: {e}")
     CONFIG_SCHEMA_AVAILABLE = False
 
-# Import the trading bot components
+# Import the trading bot components (optional: auth/signup work without them)
+ChatbotCommandHandler = VirtualPortfolio = TradingExecutor = None
+DataFeed = Stock = StockTradingBot = None
 try:
-    # Add the backend directory to the Python path
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
-
     from testindia import (
         ChatbotCommandHandler, VirtualPortfolio,
         TradingExecutor, DataFeed, Stock, StockTradingBot
     )
 except ImportError as e:
     print(f"Error importing trading bot components: {e}")
-    print("Make sure testindia.py is in the same directory")
-    sys.exit(1)
+    print("Make sure testindia.py is in the same directory. Auth/signup will work; bot features may be limited.")
 
 # Pydantic Models for Request/Response validation
 
@@ -397,6 +403,70 @@ class UpdateRiskRequest(BaseModel):
     capital_risk_pct: float
     drawdown_limit_pct: float
 
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserProfileUpdate(BaseModel):
+    fullName: Optional[str] = None
+    email: Optional[str] = None
+    preferences: Optional[Dict[str, Any]] = None
+
+
+# JWT auth
+try:
+    # CRITICAL: Import from current directory explicitly to avoid conflicts with backend/auth.py
+    # Use importlib to force loading the local auth.py file
+    import importlib.util
+    import sys
+    from pathlib import Path
+    
+    # Get absolute path to local auth.py
+    current_dir = Path(__file__).resolve().parent
+    auth_file_path = current_dir / "auth.py"
+    
+    # Load module from file explicitly - this ensures we get the correct auth.py
+    spec = importlib.util.spec_from_file_location("hft2_backend_auth", auth_file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load auth module from {auth_file_path}")
+    auth_module = importlib.util.module_from_spec(spec)
+    sys.modules["hft2_backend_auth"] = auth_module  # Prevent re-import
+    spec.loader.exec_module(auth_module)
+    
+    # Verify it has the required functions
+    if not hasattr(auth_module, 'create_user'):
+        raise AttributeError(f"auth module at {auth_file_path} missing create_user function. Found: {dir(auth_module)}")
+    
+    _http_bearer = HTTPBearer(auto_error=False)
+
+    def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_http_bearer)):
+        """Dependency: returns JWT payload dict if valid Bearer token, else None."""
+        if not credentials or not credentials.credentials:
+            return None
+        payload = auth_module.decode_token(credentials.credentials)
+        return payload
+
+    def get_current_user_required(credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer())):
+        """Dependency: returns JWT payload or raises 401."""
+        if not credentials or not credentials.credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        payload = auth_module.decode_token(credentials.credentials)
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return payload
+    JWT_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"JWT auth not available: {e}")
+    JWT_AVAILABLE = False
+    get_current_user = get_current_user_required = None
+
 # Logger already configured above
 
 
@@ -409,13 +479,14 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Add CORS middleware
+# Add CORS middleware - MUST be added before routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],  # Allow all origins (localhost:5173, etc.)
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+    expose_headers=["*"],  # Expose all headers
 )
 
 # Priority 2: Integrate custom exception handlers with FastAPI
@@ -481,9 +552,20 @@ async def key_error_handler(request, exc: KeyError):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc: Exception):
-    """Handle all other exceptions"""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    """Handle all unhandled exceptions with CORS headers"""
+    import traceback
+    logger.error(f"Unhandled exception: {exc}")
+    logger.error(traceback.format_exc())
+    # Return JSONResponse with CORS headers
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 # Global variables
 trading_bot = None
@@ -937,8 +1019,8 @@ class WebTradingBot:
         else:
             self.portfolio_manager = None
 
-        # Initialize the actual StockTradingBot from testindia.py
-        self.trading_bot = StockTradingBot(config)
+        # Initialize the actual StockTradingBot from testindia.py (if available)
+        self.trading_bot = StockTradingBot(config) if StockTradingBot else None
         self.is_running = False
         self.last_update = datetime.now()
         self.trading_thread = None
@@ -965,7 +1047,7 @@ class WebTradingBot:
 
         # Register WebSocket callback for real-time updates
         try:
-            if hasattr(self.trading_bot, 'portfolio'):
+            if self.trading_bot and hasattr(self.trading_bot, 'portfolio'):
                 self.trading_bot.portfolio.add_trade_callback(
                     self._on_trade_executed)
                 logger.info("Successfully registered portfolio callback")
@@ -1588,17 +1670,17 @@ class WebTradingBot:
             logger.info("Stopping Trading Bot and all background processes...")
 
             # Call the StockTradingBot's stop method for graceful shutdown
-            if hasattr(self.trading_bot, 'stop'):
-                try:
-                    self.trading_bot.stop()  # This will set bot_running = False and handle other cleanup
-                except Exception as e:
-                    logger.warning(
-                        f"Error calling StockTradingBot.stop(): {e}")
-                    # Fallback: manually set the flag
+            if self.trading_bot:
+                if hasattr(self.trading_bot, 'stop'):
+                    try:
+                        self.trading_bot.stop()
+                    except Exception as e:
+                        logger.warning(
+                            f"Error calling StockTradingBot.stop(): {e}")
+                        if hasattr(self.trading_bot, 'bot_running'):
+                            self.trading_bot.bot_running = False
+                elif hasattr(self.trading_bot, 'bot_running'):
                     self.trading_bot.bot_running = False
-            else:
-                # Fallback if the stop method doesn't exist
-                self.trading_bot.bot_running = False
 
             # Stop Dhan sync service if running
             if LIVE_TRADING_AVAILABLE:
@@ -1998,6 +2080,8 @@ class WebTradingBot:
 
     def process_chat_command(self, message):
         """Process chat command"""
+        if not self.trading_bot:
+            return "Trading bot components not loaded. Install optional deps (e.g. vaderSentiment) and restart."
         try:
             return self.trading_bot.chatbot.process_command(message)
         except Exception as e:
@@ -2313,6 +2397,11 @@ def initialize_bot():
         if CONFIG_SCHEMA_AVAILABLE:
             logger.info("Using schema-validated configuration loading")
             config = load_and_validate_config(default_mode)
+            # Always inject Dhan credentials from env (schema defaults are None)
+            if os.getenv("DHAN_CLIENT_ID"):
+                config["dhan_client_id"] = os.getenv("DHAN_CLIENT_ID")
+            if os.getenv("DHAN_ACCESS_TOKEN"):
+                config["dhan_access_token"] = os.getenv("DHAN_ACCESS_TOKEN")
         else:
             logger.warning(
                 "Configuration schema not available, using legacy loading")
@@ -2392,10 +2481,155 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 
 # API Routes
 
+# --- JWT Auth ---
+if JWT_AVAILABLE:
+    @app.get("/api/auth/status")
+    async def auth_status(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_http_bearer)):
+        """Auth status for trading-dashboard: always enabled when JWT is available."""
+        out = {"auth_status": "enabled"}
+        if credentials and credentials.credentials:
+            payload = auth_module.decode_token(credentials.credentials)
+            if payload:
+                out["authenticated"] = True
+                out["username"] = payload.get("sub")
+            else:
+                out["authenticated"] = False
+        else:
+            out["authenticated"] = False
+        return out
 
-@app.get("/", response_class=HTMLResponse)
+    @app.post("/api/auth/login")
+    async def auth_login(req: LoginRequest):
+        """Login: returns access_token (JWT)."""
+        # First check if MongoDB is available
+        try:
+            from db.mongo_client import get_mongo_db
+            db = get_mongo_db("trading")
+            db.command("ping")  # Test connection
+        except Exception as db_err:
+            logger.error(f"MongoDB unavailable during login: {db_err}")
+            raise HTTPException(status_code=503, detail="Database temporarily unavailable. Check MongoDB connection and try again.")
+        
+        # Now try to authenticate
+        try:
+            normalized_username = req.username.lower().strip()
+            logger.info(f"Login attempt for: '{normalized_username}' (original: '{req.username}')")
+            
+            # Try to authenticate
+            user = auth_module.authenticate_user(normalized_username, req.password)
+            if not user:
+                # MongoDB is available, so credentials are wrong or user doesn't exist
+                # Check if user exists to provide better error message
+                user_exists = auth_module.get_user_by_username(normalized_username)
+                if user_exists:
+                    logger.warning(f"Login failed: Password incorrect for user: {normalized_username}")
+                    raise HTTPException(status_code=401, detail="Password is wrong")
+                else:
+                    # User doesn't exist - log all usernames in DB for debugging (only in debug mode)
+                    logger.warning(f"Login failed: User not found: '{normalized_username}'. Make sure you're using the exact same username you registered with.")
+                    raise HTTPException(status_code=401, detail="Email id not registered or password is wrong")
+            
+            logger.info(f"Login successful for: {normalized_username}")
+            token = auth_module.create_token(sub=user["username"])
+            return {"access_token": token, "token_type": "bearer", "username": user["username"]}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during login: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error during login")
+
+    @app.post("/api/auth/register")
+    async def auth_register(req: RegisterRequest):
+        """Register a new user."""
+        if len(req.username.strip()) < 2 or len(req.password) < 6:
+            raise HTTPException(status_code=400, detail="Username (min 2) and password (min 6) required")
+        
+        normalized_username = req.username.lower().strip()
+        logger.info(f"Registration attempt for: '{normalized_username}' (original: '{req.username}')")
+        
+        # create_user() now handles MongoDB errors internally and returns None on failure
+        # Pass normalized username to ensure consistency
+        user = auth_module.create_user(normalized_username, req.password)
+        if not user:
+            # User creation failed - could be MongoDB unavailable or username taken
+            # Check if MongoDB is available to give better error message
+            try:
+                from db.mongo_client import get_mongo_db
+                get_mongo_db("trading")
+                # Check if user exists
+                existing = auth_module.get_user_by_username(normalized_username)
+                if existing:
+                    logger.warning(f"Registration failed: Username already exists: {normalized_username}")
+                    raise HTTPException(status_code=400, detail="Username already taken")
+                else:
+                    logger.error(f"Registration failed: User creation returned None but user doesn't exist")
+                    raise HTTPException(status_code=500, detail="Failed to create user. Please try again.")
+            except HTTPException:
+                raise
+            except Exception as e:
+                # MongoDB is unavailable
+                logger.error(f"MongoDB unavailable during registration: {e}")
+                raise HTTPException(status_code=503, detail="Database temporarily unavailable. Check MongoDB connection and try again.")
+        
+        logger.info(f"User registered successfully: {user.get('username')}")
+        token = auth_module.create_token(sub=user["username"])
+        return {"access_token": token, "token_type": "bearer", "username": user["username"]}
+
+    @app.get("/api/user/profile")
+    async def get_user_profile(payload: dict = Depends(get_current_user_required)):
+        """Get current user profile from DB (stored per user)."""
+        try:
+            from db.mongo_client import get_mongo_db
+            db = get_mongo_db("trading")
+            col = db["profiles"]
+            username = payload.get("sub") or ""
+            doc = col.find_one({"username": username})
+            if doc and "_id" in doc:
+                doc.pop("_id", None)
+            return doc or {"username": username, "fullName": "", "email": "", "preferences": {}}
+        except Exception as e:
+            logger.exception("Get profile error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+    @app.post("/api/user/profile")
+    async def save_user_profile(req: UserProfileUpdate, payload: dict = Depends(get_current_user_required)):
+        """Save current user profile to DB."""
+        try:
+            from db.mongo_client import get_mongo_db
+            from datetime import datetime
+            db = get_mongo_db("trading")
+            col = db["profiles"]
+            username = payload.get("sub") or ""
+            update = {"username": username, "updated_at": datetime.utcnow()}
+            if req.fullName is not None:
+                update["fullName"] = req.fullName
+            if req.email is not None:
+                update["email"] = req.email
+            if req.preferences is not None:
+                update["preferences"] = req.preferences
+            col.update_one(
+                {"username": username},
+                {"$set": update},
+                upsert=True,
+            )
+            return {"success": True, "message": "Profile saved"}
+        except Exception as e:
+            logger.exception("Save profile error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+
+@app.get("/")
 async def index():
-    """Serve the main HTML page"""
+    """Root endpoint - returns simple JSON for connection checks"""
+    return {"status": "ok", "message": "Backend API is running", "endpoints": {
+        "health": "/api/health",
+        "docs": "/docs",
+        "auth": "/api/auth/login"
+    }}
+
+@app.get("/web", response_class=HTMLResponse)
+async def web_interface():
+    """Serve the main HTML page (if web_interface.html exists)"""
     try:
         with open('web_interface.html', 'r', encoding='utf-8') as f:
             return HTMLResponse(content=f.read())
@@ -2452,6 +2686,20 @@ async def health_check():
             "version": "1.0.0",
             "services": {}
         }
+        
+        # Check MongoDB connectivity first (critical for auth)
+        try:
+            from db.mongo_client import get_mongo_db
+            db = get_mongo_db("trading")
+            # Test connection with a simple operation
+            db.command("ping")
+            health_status["services"]["mongodb"] = {"status": "healthy"}
+        except Exception as e:
+            health_status["services"]["mongodb"] = {
+                "status": "unhealthy",
+                "error": str(e)[:100]
+            }
+            health_status["status"] = "degraded"
 
         # Check trading bot status
         if trading_bot:
@@ -2472,20 +2720,32 @@ async def health_check():
                 "status": "not_initialized"
             }
 
-        # Check data service client
+        # Check data service client (non-blocking - don't fail health check if data service is slow)
         try:
             data_client = get_data_client()
-            if data_client.health_check():
-                health_status["services"]["data_service"] = {
-                    "status": "healthy"}
-            else:
-                health_status["services"]["data_service"] = {
-                    "status": "unhealthy"}
+            # Run health check in thread pool with timeout to avoid blocking
+            import asyncio
+            try:
+                # Try health check with timeout - don't block health endpoint
+                health_result = await asyncio.wait_for(
+                    asyncio.to_thread(data_client.health_check), 
+                    timeout=3.0  # 3 second timeout
+                )
+                if health_result:
+                    health_status["services"]["data_service"] = {"status": "healthy"}
+                else:
+                    health_status["services"]["data_service"] = {"status": "unhealthy"}
+            except asyncio.TimeoutError:
+                # Data service is slow - mark as degraded but don't fail health endpoint
+                health_status["services"]["data_service"] = {"status": "degraded", "note": "Response timeout"}
+            except Exception as e:
+                # Log at debug level - don't spam logs with warnings
+                logger.debug(f"Data service health check error: {e}")
+                health_status["services"]["data_service"] = {"status": "unavailable", "error": str(e)[:50]}
         except Exception as e:
-            health_status["services"]["data_service"] = {
-                "status": "error",
-                "error": str(e)
-            }
+            # If we can't even get the client, mark as unavailable
+            logger.debug(f"Data service client unavailable: {e}")
+            health_status["services"]["data_service"] = {"status": "unavailable"}
 
         # Check MCP service (if available)
         try:
@@ -2918,7 +3178,7 @@ async def bulk_update_watchlist(request: BulkWatchlistRequest):
                 logger.error(f"Error processing ticker {ticker}: {e}")
 
         # Update data feed with new tickers
-        if successful_tickers and action == "ADD":
+        if successful_tickers and action == "ADD" and DataFeed:
             try:
                 trading_bot.data_feed = DataFeed(trading_bot.config["tickers"])
                 logger.info(
@@ -4358,54 +4618,79 @@ def find_available_port(start_port=5000, max_attempts=10):
 
 def run_web_server(host='127.0.0.1', port=5000, debug=False):
     """Run the FastAPI web server with uvicorn"""
+    global trading_bot
     try:
-        # Check if the requested port is available, if not find an available one
+        # Check if the requested port is available
+        # CRITICAL: Frontend expects port 5000, so we must use it or fail
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind((host, port))
         except OSError:
-            logger.warning(
-                f"Port {port} is already in use. Finding an available port...")
-            port = find_available_port(port + 1)
-            logger.info(f"Using available port: {port}")
+            # Port 5000 is in use - try to kill the process (Windows)
+            logger.warning(f"Port {port} is already in use. Attempting to free it...")
+            try:
+                import subprocess
+                import platform
+                if platform.system() == "Windows":
+                    # Find PID using port 5000
+                    result = subprocess.run(
+                        ["netstat", "-ano"], capture_output=True, text=True
+                    )
+                    for line in result.stdout.splitlines():
+                        if f":{port}" in line and "LISTENING" in line:
+                            parts = line.split()
+                            if len(parts) > 4:
+                                pid = parts[-1]
+                                logger.info(f"Killing process {pid} on port {port}")
+                                subprocess.run(["taskkill", "/PID", pid, "/F"], 
+                                             capture_output=True, check=False)
+                                time.sleep(1)  # Wait for port to be freed
+                                break
+                # Try binding again
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind((host, port))
+                logger.info(f"Port {port} is now available")
+            except Exception as e:
+                logger.error(f"Failed to free port {port}: {e}")
+                logger.error(f"Please manually kill the process using port {port} and restart")
+                raise RuntimeError(f"Port {port} is in use and could not be freed")
 
-        # Initialize the trading bot
-        initialize_bot()
-
+        # Don't initialize bot here - let the startup event handler do it
+        # This prevents double initialization and blocking the server start
         logger.info(f"Starting FastAPI web server on http://{host}:{port}")
         logger.info("Web interface will be available at the above URL")
         logger.info("API documentation available at http://{host}:{port}/docs")
 
-        # Configure uvicorn
-        config = uvicorn.Config(
-            app=app,
-            host=host,
-            port=port,
-            log_level="info" if debug else "warning",
-            reload=debug,
-            access_log=debug
-        )
-
-        # Run the FastAPI app with uvicorn
-        server = uvicorn.Server(config)
-        server.run()
+        # Configure uvicorn - use direct run to ensure server stays alive
+        import uvicorn
+        try:
+            uvicorn.run(
+                app,
+                host=host,
+                port=port,
+                log_level="info",  # Use info to see startup messages
+                reload=False,  # Disable reload to prevent crashes
+                access_log=True  # Always log access to debug connectivity
+            )
+        except KeyboardInterrupt:
+            logger.info("Server stopped by user")
+        except Exception as e:
+            logger.error(f"Server error: {e}")
+            logger.exception("Full traceback:")
+            raise
 
     except Exception as e:
         logger.error(f"Error running web server: {e}")
         raise
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the trading bot on startup with data service health check"""
+def _do_blocking_bot_init():
+    """Sync helper: data service check + update watchlist + initialize_bot. Run in thread only."""
     global trading_bot
-
     try:
-        # PRODUCTION FIX: Check data service health before starting
         data_client = get_data_client()
         if data_client.is_service_available():
             logger.info("*** DATA SERVICE AVAILABLE - PRODUCTION MODE ***")
-            # Update watchlist in data service with all stocks the bot might need
             comprehensive_watchlist = [
                 "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
                 "SUZLON.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS",
@@ -4414,159 +4699,149 @@ async def startup_event():
             ]
             data_client.update_watchlist(comprehensive_watchlist)
         else:
-            logger.warning(
-                "*** DATA SERVICE NOT AVAILABLE - FALLBACK MODE ***")
+            logger.warning("*** DATA SERVICE NOT AVAILABLE - FALLBACK MODE ***")
             logger.info("Backend will use Yahoo Finance and mock data")
-
         initialize_bot()
-
-        # Priority 3: Execute pending async initializations
-        if trading_bot and hasattr(trading_bot, '_pending_async_inits'):
-            logger.info("Executing pending async initializations...")
-            for component_name, init_func in trading_bot._pending_async_inits:
-                try:
-                    await init_func()
-                    logger.info(f"Successfully initialized {component_name}")
-                except Exception as e:
-                    logger.error(f"Failed to initialize {component_name}: {e}")
-            # Clear pending initializations
-            trading_bot._pending_async_inits = []
-
-        logger.info("Trading bot initialized on startup")
-
-        # Start Dhan sync service if in live mode
-        if LIVE_TRADING_AVAILABLE and trading_bot and trading_bot.config.get("mode") == "live":
-            try:
-                # Check Dhan credentials before starting sync service
-                dhan_client_id = os.getenv("DHAN_CLIENT_ID")
-                dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
-
-                if not dhan_client_id or not dhan_access_token:
-                    logger.error(
-                        "DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN not found in environment variables")
-                    logger.error(
-                        "Please set these in your .env file to enable live trading")
-                else:
-                    sync_service = start_sync_service(
-                        sync_interval=30)  # Sync every 30 seconds
-                    if sync_service:
-                        try:
-                            # Prefer the richer DhanAPIClient if available on the trading bot
-                            current_balance = 0.0
-                            funds = None
-                            dhan_client = None
-                            try:
-                                if hasattr(trading_bot, 'live_executor') and getattr(trading_bot.live_executor, 'dhan_client', None):
-                                    dhan_client = trading_bot.live_executor.dhan_client
-                                elif getattr(trading_bot, 'dhan_client', None):
-                                    dhan_client = trading_bot.dhan_client
-                            except Exception:
-                                dhan_client = None
-
-                            if dhan_client:
-                                try:
-                                    funds = dhan_client.get_funds()
-                                except Exception as e:
-                                    logger.debug(
-                                        f"DhanAPIClient.get_funds() failed: {e}")
-
-                            # Fallback to sync service's method if DhanAPIClient not available
-                            if funds is None:
-                                funds = sync_service.get_dhan_funds()
-
-                            # Extract numeric balance for logging
-                            if isinstance(funds, dict):
-                                for key in ('availableBalance', 'availabelBalance', 'available_balance', 'available', 'availBalance', 'cash', 'netBalance', 'totalBalance'):
-                                    if key in funds:
-                                        try:
-                                            current_balance = float(
-                                                funds.get(key, 0.0) or 0.0)
-                                            break
-                                        except Exception:
-                                            continue
-                                else:
-                                    for v in funds.values():
-                                        if isinstance(v, (int, float)):
-                                            current_balance = float(v)
-                                            break
-
-                            # If balance is zero, log debug information to diagnose
-                            if abs(current_balance) < 0.01:
-                                logger.debug(
-                                    f"Dhan funds response on startup: {funds}")
-
-                            logger.info(
-                                f"🚀 Dhan real-time sync service started (30s interval) — Balance: ₹{current_balance:.2f}")
-                        except Exception as e:
-                            logger.info(
-                                "🚀 Dhan real-time sync service started (30s interval)")
-                            logger.debug(
-                                f"Failed to fetch initial Dhan funds: {e}")
-                    else:
-                        logger.warning("Failed to start Dhan sync service")
-            except Exception as sync_error:
-                logger.error(f"Error starting Dhan sync service: {sync_error}")
-
     except Exception as e:
-        logger.error(f"Error initializing bot on startup: {e}")
-        # Integration Fix: Enhanced error recovery with multiple fallback levels
+        logger.error(f"Blocking bot init failed: {e}")
+        logger.exception("Full traceback:")
+        trading_bot = None
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the trading bot on startup - NON-BLOCKING: all heavy work runs in thread."""
+    global trading_bot
+    
+    async def init_bot_background():
+        """Run blocking init in executor so event loop stays free and server can accept connections."""
+        global trading_bot
         try:
-            if not trading_bot:
-                logger.info("Attempting fallback initialization...")
-                from dotenv import load_dotenv
-                load_dotenv()
+            import asyncio
+            loop = asyncio.get_event_loop()
+            # CRITICAL: Run ALL blocking work (HTTP/data service + initialize_bot) in thread
+            # so the server event loop is never blocked and port 5000 responds immediately
+            await loop.run_in_executor(None, _do_blocking_bot_init)
 
-                # Level 1: Minimal safe configuration
-                minimal_config = {
-                    "tickers": ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"],
-                    "starting_balance": 10000,
-                    "current_portfolio_value": 10000,
-                    "current_pnl": 0,
-                    "mode": "paper",
-                    "stop_loss_pct": 0.05,
-                    "max_capital_per_trade": 0.25,
-                    "max_trade_limit": 150,
-                    "sleep_interval": 300
-                }
-
-                # Priority 3: Validate fallback config with integrated validator
-                try:
-                    validated_config = ConfigValidator.validate_config(
-                        minimal_config)
-                    trading_bot = WebTradingBot(validated_config)
-                    logger.info(
-                        "Level 1 fallback trading bot initialized successfully")
-                except ConfigurationError as config_error:
-                    logger.error(
-                        f"Level 1 configuration validation failed: {config_error}")
-
-                    # Level 2: Ultra-minimal configuration
+            # Priority 3: Execute pending async initializations
+            if trading_bot and hasattr(trading_bot, '_pending_async_inits'):
+                logger.info("Executing pending async initializations...")
+                for component_name, init_func in trading_bot._pending_async_inits:
                     try:
-                        ultra_minimal_config = {
-                            "tickers": [],
-                            "starting_balance": 10000,
-                            "mode": "paper",
-                            "stop_loss_pct": 0.05,
-                            "max_capital_per_trade": 0.25,
-                            "sleep_interval": 300
-                        }
-                        validated_ultra_config = ConfigValidator.validate_config(
-                            ultra_minimal_config)
-                        trading_bot = WebTradingBot(validated_ultra_config)
-                        logger.warning(
-                            "Level 2 ultra-minimal fallback initialized - limited functionality")
-                    except Exception as level2_error:
-                        logger.error(
-                            f"All fallback levels failed: {level2_error}")
-                        trading_bot = None
-                except Exception as level1_error:
-                    logger.error(f"Level 1 fallback failed: {level1_error}")
-                    trading_bot = None
+                        await init_func()
+                        logger.info(f"Successfully initialized {component_name}")
+                    except Exception as e:
+                        logger.error(f"Failed to initialize {component_name}: {e}")
+                # Clear pending initializations
+                trading_bot._pending_async_inits = []
 
-        except Exception as fallback_error:
-            logger.error(
-                f"Complete fallback initialization failed: {fallback_error}")
+            logger.info("Trading bot initialized on startup")
+
+            # Start Dhan sync service if in live mode
+            if LIVE_TRADING_AVAILABLE and trading_bot and trading_bot.config.get("mode") == "live":
+                try:
+                    # Check Dhan credentials before starting sync service
+                    dhan_client_id = os.getenv("DHAN_CLIENT_ID")
+                    dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
+
+                    if not dhan_client_id or not dhan_access_token:
+                        logger.error(
+                            "DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN not found in environment variables")
+                        logger.error(
+                            "Please set these in your .env file to enable live trading")
+                    else:
+                        sync_service = start_sync_service(
+                            sync_interval=30)  # Sync every 30 seconds
+                        if sync_service:
+                            try:
+                                # Prefer the richer DhanAPIClient if available on the trading bot
+                                current_balance = 0.0
+                                funds = None
+                                dhan_client = None
+                                try:
+                                    if hasattr(trading_bot, 'live_executor') and getattr(trading_bot.live_executor, 'dhan_client', None):
+                                        dhan_client = trading_bot.live_executor.dhan_client
+                                    elif getattr(trading_bot, 'dhan_client', None):
+                                        dhan_client = trading_bot.dhan_client
+                                except Exception:
+                                    dhan_client = None
+
+                                if dhan_client:
+                                    try:
+                                        funds = dhan_client.get_funds()
+                                    except Exception as e:
+                                        logger.debug(
+                                            f"DhanAPIClient.get_funds() failed: {e}")
+
+                                # Fallback to sync service's method if DhanAPIClient not available
+                                if funds is None:
+                                    funds = sync_service.get_dhan_funds()
+
+                                # Extract numeric balance for logging
+                                if isinstance(funds, dict):
+                                    for key in ('availableBalance', 'availabelBalance', 'available_balance', 'available', 'availBalance', 'cash', 'netBalance', 'totalBalance'):
+                                        if key in funds:
+                                            try:
+                                                current_balance = float(
+                                                    funds.get(key, 0.0) or 0.0)
+                                                break
+                                            except Exception:
+                                                continue
+                                    else:
+                                        for v in funds.values():
+                                            if isinstance(v, (int, float)):
+                                                current_balance = float(v)
+                                                break
+
+                                # If balance is zero, log debug information to diagnose
+                                if abs(current_balance) < 0.01:
+                                    logger.debug(
+                                        f"Dhan funds response on startup: {funds}")
+
+                                logger.info(
+                                    f"🚀 Dhan real-time sync service started (30s interval) — Balance: ₹{current_balance:.2f}")
+                            except Exception as e:
+                                logger.info(
+                                    "🚀 Dhan real-time sync service started (30s interval)")
+                                logger.debug(
+                                    f"Failed to fetch initial Dhan funds: {e}")
+                        else:
+                            logger.warning("Failed to start Dhan sync service")
+                except Exception as sync_error:
+                    logger.error(f"Error starting Dhan sync service: {sync_error}")
+        except Exception as e:
+            logger.error(f"Error initializing bot in background: {e}")
+            logger.exception("Full traceback:")
             trading_bot = None
+    
+    # Mark server start time for /api/health uptime
+    import time
+    app.start_time = time.time()
+
+    # CRITICAL: Start bot initialization as background task - server starts immediately
+    # Use asyncio.create_task to run in background without blocking
+    # Wrap in try-except to ensure server startup completes even if task creation fails
+    try:
+        import asyncio
+        # Create task but don't await it - let it run in background
+        task = asyncio.create_task(init_bot_background())
+        # Add error callback to prevent unhandled exceptions from crashing the server
+        def handle_task_error(task):
+            try:
+                task.result()  # This will raise if task failed
+            except Exception as e:
+                logger.error(f"Background bot initialization failed: {e}")
+                logger.exception("Full traceback:")
+        task.add_done_callback(handle_task_error)
+        logger.info("Server started - bot initialization running in background")
+    except Exception as e:
+        logger.error(f"Failed to start background initialization task: {e}")
+        logger.exception("Full traceback:")
+        # Don't crash the server if background task creation fails
+    
+    # CRITICAL: Return immediately so FastAPI marks startup as complete
+    # The background task will continue running independently
+    # No await here - function returns immediately
 
 
 @app.get("/api/monitoring")
@@ -4684,8 +4959,9 @@ async def scan_all():
 @app.post("/api/analyze")
 async def analyze_stocks(request: AnalyzeRequest):
     """Analyze custom tickers and return entry/exit points with confidence"""
+    if not Stock:
+        raise HTTPException(status_code=503, detail="Analysis components not loaded. Install optional deps and restart.")
     try:
-        from testindia import Stock  # Import your existing analysis logic
         results = {}
 
         for ticker in request.tickers:

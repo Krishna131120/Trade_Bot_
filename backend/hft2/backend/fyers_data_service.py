@@ -605,8 +605,9 @@ def main():
     logger.info("=" * 60)
 
     try:
+        # Use the app object directly instead of string import to avoid import issues
         uvicorn.run(
-            "fyers_data_service:service.app",
+            service.app,
             host=args.host,
             port=args.port,
             reload=args.reload,
@@ -616,7 +617,9 @@ def main():
         logger.info("Service stopped by user")
     except Exception as e:
         logger.error(f"Service error: {e}")
-        sys.exit(1)
+        logger.exception("Full traceback:")
+        # Don't exit with code 1 - let run_hft2 handle it
+        raise
 
 if __name__ == "__main__":
     main()

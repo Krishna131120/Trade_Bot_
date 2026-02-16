@@ -112,7 +112,7 @@ const UserProfilePage = () => {
       showNotification('success', 'Logged Out', 'You have been successfully logged out.');
       // Redirect to login
       setTimeout(() => {
-        navigate('/login');
+        navigate('/');
       }, 500);
     } catch (error: any) {
       showNotification('error', 'Logout Failed', error.message || 'Failed to logout.');
@@ -159,9 +159,9 @@ const UserProfilePage = () => {
                 </div>
                 <div>
                   <h2 className="text-2xl font-bold">
-                    {fullName || user?.username || 'Unknown User'}
+                    {fullName || user?.username || 'Your account'}
                   </h2>
-                  <p className="text-blue-100">Connected Account</p>
+                  <p className="text-blue-100">Samruddhi Trading Hub</p>
                 </div>
               </div>
             </div>
@@ -189,7 +189,7 @@ const UserProfilePage = () => {
                   </div>
                 </label>
                 <div className="bg-slate-100 dark:bg-slate-700 rounded-lg p-4 text-slate-900 dark:text-slate-100 font-medium">
-                  {user?.username || 'N/A'}
+                  {user?.username ?? '—'}
                 </div>
               </div>
 

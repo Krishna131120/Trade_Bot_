@@ -92,7 +92,7 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
     }
 
     // Navigate immediately using React Router (replace: true prevents back button)
-    navigate('/login', { replace: true });
+    navigate('/', { replace: true });
   };
 
   return (
@@ -131,7 +131,7 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
                 : isSpace
                   ? 'text-white drop-shadow-lg'
                   : 'text-white'
-              }`}>Trading Hub</h1>
+              }`}>Samruddhi Trading Hub</h1>
           )}
           {onToggleCollapse && (
             <button
@@ -259,7 +259,7 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
                         ? 'text-red-400'
                         : 'text-red-500'
                   }`}>
-                  {health.status}
+                  {user?.username ?? health.status}
                 </p>
               </div>
               <div className={`w-2 h-2 rounded-full flex-shrink-0 ${health.healthy
