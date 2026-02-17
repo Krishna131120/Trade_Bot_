@@ -108,7 +108,7 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
 
       {/* Sidebar */}
       <div className={`
-        fixed lg:static top-0 left-0 h-screen flex flex-col relative z-50
+        fixed lg:static top-0 left-0 h-screen flex flex-col lg:relative z-50
         ${isCollapsed ? 'w-16' : 'w-64'} transform transition-all duration-300 ease-in-out
         ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         ${isLight
@@ -120,27 +120,27 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
       `}>
         {/* Header with toggle button */}
         <div className={`flex items-center justify-between p-3 border-b flex-shrink-0 ${isLight
-            ? 'border-gray-200'
-            : isSpace
-              ? 'border-purple-900/20'
-              : 'border-slate-700'
+          ? 'border-gray-200'
+          : isSpace
+            ? 'border-purple-900/20'
+            : 'border-slate-700'
           }`}>
           {!isCollapsed && (
             <h1 className={`text-lg font-bold ${isLight
-                ? 'text-gray-900'
-                : isSpace
-                  ? 'text-white drop-shadow-lg'
-                  : 'text-white'
+              ? 'text-gray-900'
+              : isSpace
+                ? 'text-white drop-shadow-lg'
+                : 'text-white'
               }`}>Samruddhi Trading Hub</h1>
           )}
           {onToggleCollapse && (
             <button
               onClick={onToggleCollapse}
               className={`p-1.5 rounded transition-colors ${isLight
-                  ? 'text-gray-600 hover:bg-gray-100'
-                  : isSpace
-                    ? 'text-white/90 hover:bg-white/10 hover:text-white drop-shadow'
-                    : 'text-gray-300 hover:bg-slate-800 hover:text-white'
+                ? 'text-gray-600 hover:bg-gray-100'
+                : isSpace
+                  ? 'text-white/90 hover:bg-white/10 hover:text-white drop-shadow'
+                  : 'text-gray-300 hover:bg-slate-800 hover:text-white'
                 }`}
               title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
@@ -156,22 +156,22 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
         {/* Mobile header with close button */}
         {onClose && (
           <div className={`flex items-center justify-between p-3 border-b lg:hidden flex-shrink-0 ${isLight
-              ? 'border-gray-200'
-              : isSpace
-                ? 'border-purple-900/20'
-                : 'border-slate-700'
+            ? 'border-gray-200'
+            : isSpace
+              ? 'border-purple-900/20'
+              : 'border-slate-700'
             }`}>
             <h1 className={`text-lg font-bold ${isLight
-                ? 'text-gray-900'
-                : isSpace
-                  ? 'text-white drop-shadow-lg'
-                  : 'text-white'
+              ? 'text-gray-900'
+              : isSpace
+                ? 'text-white drop-shadow-lg'
+                : 'text-white'
               }`}>Menu</h1>
             <button
               onClick={onClose}
               className={`p-1.5 rounded transition-colors ${isLight
-                  ? 'text-gray-600 hover:bg-gray-100'
-                  : 'text-gray-400 hover:bg-slate-800 hover:text-white'
+                ? 'text-gray-600 hover:bg-gray-100'
+                : 'text-gray-400 hover:bg-slate-800 hover:text-white'
                 }`}
             >
               <X className="w-5 h-5" />
@@ -190,12 +190,12 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
                 to={item.path}
                 onClick={handleNavClick}
                 className={`flex items-center gap-2 px-3 py-2.5 rounded transition-colors ${isActive
-                    ? 'bg-blue-500 text-white'
-                    : isLight
-                      ? 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                      : isSpace
-                        ? 'text-white/90 hover:bg-white/10 hover:text-white drop-shadow'
-                        : 'text-gray-300 hover:bg-slate-800 hover:text-white'
+                  ? 'bg-blue-500 text-white'
+                  : isLight
+                    ? 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                    : isSpace
+                      ? 'text-white/90 hover:bg-white/10 hover:text-white drop-shadow'
+                      : 'text-gray-300 hover:bg-slate-800 hover:text-white'
                   } ${isCollapsed ? '!px-2 !justify-center' : ''}`}
               >
                 <Icon className={`w-5 h-5 flex-shrink-0 ${isCollapsed ? 'mx-auto' : ''}`} />
@@ -208,73 +208,73 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
         {/* Fixed footer */}
         {!isCollapsed && (
           <div className={`p-3 border-t flex-shrink-0 ${isLight
-              ? 'border-gray-200'
-              : isSpace
-                ? 'border-purple-900/20'
-                : 'border-slate-700'
+            ? 'border-gray-200'
+            : isSpace
+              ? 'border-purple-900/20'
+              : 'border-slate-700'
             }`}>
 
 
             {/* Health Status Indicator */}
             <div className={`flex items-center gap-2 px-3 py-2.5 rounded mb-3 ${health.healthy
-                ? isLight
-                  ? 'bg-green-50 border border-green-200'
-                  : isSpace
-                    ? 'bg-green-900/20 border border-green-900/40'
-                    : 'bg-green-900/20 border border-green-800/40'
-                : isLight
-                  ? 'bg-red-50 border border-red-200'
-                  : isSpace
-                    ? 'bg-red-900/20 border border-red-900/40'
-                    : 'bg-red-900/20 border border-red-800/40'
+              ? isLight
+                ? 'bg-green-50 border border-green-200'
+                : isSpace
+                  ? 'bg-green-900/20 border border-green-900/40'
+                  : 'bg-green-900/20 border border-green-800/40'
+              : isLight
+                ? 'bg-red-50 border border-red-200'
+                : isSpace
+                  ? 'bg-red-900/20 border border-red-900/40'
+                  : 'bg-red-900/20 border border-red-800/40'
               }`}>
               <Activity className={`w-4 h-4 flex-shrink-0 ${health.healthy
-                  ? 'text-green-600'
-                  : 'text-red-600'
+                ? 'text-green-600'
+                : 'text-red-600'
                 }`} />
               <div className="flex-1 min-w-0">
                 <p className={`text-xs font-semibold ${health.healthy
-                    ? isLight
-                      ? 'text-green-700'
-                      : isSpace
-                        ? 'text-green-300'
-                        : 'text-green-400'
-                    : isLight
-                      ? 'text-red-700'
-                      : isSpace
-                        ? 'text-red-300'
-                        : 'text-red-400'
+                  ? isLight
+                    ? 'text-green-700'
+                    : isSpace
+                      ? 'text-green-300'
+                      : 'text-green-400'
+                  : isLight
+                    ? 'text-red-700'
+                    : isSpace
+                      ? 'text-red-300'
+                      : 'text-red-400'
                   }`}>
                   System {health.healthy ? 'Online' : 'Offline'}
                 </p>
                 <p className={`text-xs truncate ${health.healthy
-                    ? isLight
-                      ? 'text-green-600'
-                      : isSpace
-                        ? 'text-green-400'
-                        : 'text-green-500'
-                    : isLight
-                      ? 'text-red-600'
-                      : isSpace
-                        ? 'text-red-400'
-                        : 'text-red-500'
+                  ? isLight
+                    ? 'text-green-600'
+                    : isSpace
+                      ? 'text-green-400'
+                      : 'text-green-500'
+                  : isLight
+                    ? 'text-red-600'
+                    : isSpace
+                      ? 'text-red-400'
+                      : 'text-red-500'
                   }`}>
                   {user?.username ?? health.status}
                 </p>
               </div>
               <div className={`w-2 h-2 rounded-full flex-shrink-0 ${health.healthy
-                  ? 'bg-green-500 animate-pulse'
-                  : 'bg-red-500'
+                ? 'bg-green-500 animate-pulse'
+                : 'bg-red-500'
                 }`}></div>
             </div>
 
             <button
               onClick={handleLogout}
               className={`flex items-center gap-2 px-3 py-2.5 w-full rounded transition-colors ${isLight
-                  ? 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                  : isSpace
-                    ? 'text-white/90 hover:bg-white/10 hover:text-white drop-shadow'
-                    : 'text-gray-300 hover:bg-slate-800 hover:text-white'
+                ? 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                : isSpace
+                  ? 'text-white/90 hover:bg-white/10 hover:text-white drop-shadow'
+                  : 'text-gray-300 hover:bg-slate-800 hover:text-white'
                 }`}
             >
               <LogOut className="w-5 h-5 flex-shrink-0" />

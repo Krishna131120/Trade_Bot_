@@ -247,7 +247,7 @@ export const stockAPI = {
     forceRefresh?: boolean
   ) => {
     const key = `predict_${symbols.join(',')}_${horizon}`;
-    
+
     return requestDeduplicator.deduplicate(key, async () => {
       const payload: any = {
         symbols,
@@ -260,36 +260,36 @@ export const stockAPI = {
 
       log('Calling /tools/predict (async + poll)...', payload);
       try {
-      // Use async endpoint: start job then poll (no long-held request = no timeout)
-      // Use predictionApi (port 8000) for /tools/predict endpoints
-      const startResp = await predictionApi.post('/tools/predict/async', payload, { timeout: 60000 });
-      const jobId = startResp.data?.job_id;
-      if (!jobId) throw new Error('Backend did not return job_id');
-      log('Predict job started:', jobId);
-      let responseData: any = null;
-      const pollIntervalMs = 12000;
-      const pollTimeoutMs = 45000;
-      const maxPolls = 150; // ~30 min
-      for (let i = 0; i < maxPolls; i++) {
-        const pollResp = await predictionApi.get(`/tools/predict/result/${jobId}`, { timeout: pollTimeoutMs });
-        if (pollResp.status === 404) throw new Error('Prediction job expired or not found');
-        if (pollResp.status === 200) {
-          responseData = pollResp.data;
-          if (responseData?.status === 'failed') throw new Error(responseData?.error || 'Prediction failed');
-          break;
+        // Use async endpoint: start job then poll (no long-held request = no timeout)
+        // Use predictionApi (port 8000) for /tools/predict endpoints
+        const startResp = await predictionApi.post('/tools/predict/async', payload, { timeout: 60000 });
+        const jobId = startResp.data?.job_id;
+        if (!jobId) throw new Error('Backend did not return job_id');
+        log('Predict job started:', jobId);
+        let responseData: any = null;
+        const pollIntervalMs = 12000;
+        const pollTimeoutMs = 45000;
+        const maxPolls = 150; // ~30 min
+        for (let i = 0; i < maxPolls; i++) {
+          const pollResp = await predictionApi.get(`/tools/predict/result/${jobId}`, { timeout: pollTimeoutMs });
+          if (pollResp.status === 404) throw new Error('Prediction job expired or not found');
+          if (pollResp.status === 200) {
+            responseData = pollResp.data;
+            if (responseData?.status === 'failed') throw new Error(responseData?.error || 'Prediction failed');
+            break;
+          }
+          await new Promise(r => setTimeout(r, pollIntervalMs));
         }
-        await new Promise(r => setTimeout(r, pollIntervalMs));
-      }
-      if (!responseData) throw new Error('Prediction timed out (backend did not finish in time)');
-      log('Predict response received:', { hasPredictions: 'predictions' in responseData });
+        if (!responseData) throw new Error('Prediction timed out (backend did not finish in time)');
+        log('Predict response received:', { hasPredictions: 'predictions' in responseData });
 
-      // Validate API response for data integrity
-      const apiValidation = validateApiResponse(responseData);
+        // Validate API response for data integrity
+        const apiValidation = validateApiResponse(responseData);
 
-      const normalizedPredictions = Array.isArray(responseData?.predictions)
-        ? responseData.predictions
-        : Array.isArray(responseData?.results)
-          ? responseData.results.map((item: any) => {
+        const normalizedPredictions = Array.isArray(responseData?.predictions)
+          ? responseData.predictions
+          : Array.isArray(responseData?.results)
+            ? responseData.results.map((item: any) => {
               const symbol = typeof item?.symbol === 'string' ? item.symbol : 'UNKNOWN';
               const status = String(item?.status || '').toLowerCase();
               if (status === 'success' && item?.data && typeof item.data === 'object') {
@@ -297,19 +297,19 @@ export const stockAPI = {
               }
               return { symbol, error: item?.error || 'Prediction unavailable' };
             })
-          : null;
-      
-      // Validate and enrich response with comprehensive validation metadata
-      if (normalizedPredictions) {
-        const validatedPredictions = normalizedPredictions.map((prediction: any) => {
-          if (prediction.error) return prediction;
-          
-          // Legacy price validation
-          const predictedPriceValid = prediction.predicted_price !== undefined ? 
-            validatePrice(prediction.predicted_price, prediction.symbol) : null;
-            const currentPriceValid = prediction.current_price !== undefined ? 
+            : null;
+
+        // Validate and enrich response with comprehensive validation metadata
+        if (normalizedPredictions) {
+          const validatedPredictions = normalizedPredictions.map((prediction: any) => {
+            if (prediction.error) return prediction;
+
+            // Legacy price validation
+            const predictedPriceValid = prediction.predicted_price !== undefined ?
+              validatePrice(prediction.predicted_price, prediction.symbol) : null;
+            const currentPriceValid = prediction.current_price !== undefined ?
               validatePrice(prediction.current_price, prediction.symbol) : null;
-            
+
             // Market data validation
             const marketDataValidation = marketDataValidator.validatePriceData({
               symbol: prediction.symbol,
@@ -318,33 +318,33 @@ export const stockAPI = {
               source: prediction.price_metadata?.price_source || 'api_response',
               metadata: prediction.price_metadata
             });
-            
+
+            return {
+              ...prediction,
+              _priceValidation: {
+                predictedPrice: predictedPriceValid,
+                currentPrice: currentPriceValid,
+                hasValidPrice: (predictedPriceValid?.valid || currentPriceValid?.valid) ?? false
+              },
+              _marketDataValidation: marketDataValidation,
+              _dataIntegrity: {
+                isReal: marketDataValidation.isReal,
+                confidence: marketDataValidation.confidence,
+                shouldDisplay: marketDataValidator.shouldDisplayData(marketDataValidation, false),
+                sourceLabel: marketDataValidator.getSourceLabel(marketDataValidation),
+                validationMessage: marketDataValidator.getValidationMessage(marketDataValidation)
+              }
+            };
+          });
+
           return {
-            ...prediction,
-            _priceValidation: {
-              predictedPrice: predictedPriceValid,
-              currentPrice: currentPriceValid,
-              hasValidPrice: (predictedPriceValid?.valid || currentPriceValid?.valid) ?? false
-            },
-            _marketDataValidation: marketDataValidation,
-            _dataIntegrity: {
-              isReal: marketDataValidation.isReal,
-              confidence: marketDataValidation.confidence,
-              shouldDisplay: marketDataValidator.shouldDisplayData(marketDataValidation, false),
-              sourceLabel: marketDataValidator.getSourceLabel(marketDataValidation),
-              validationMessage: marketDataValidator.getValidationMessage(marketDataValidation)
-            }
+            ...responseData,
+            predictions: validatedPredictions,
+            _apiValidation: apiValidation
           };
-        });
-        
-        return {
-          ...responseData,
-          predictions: validatedPredictions,
-          _apiValidation: apiValidation
-        };
-      }
-      
-      return responseData;
+        }
+
+        return responseData;
       } catch (error: any) {
         log('Predict error:', {
           message: error.message,
@@ -384,7 +384,7 @@ export const stockAPI = {
     drawdownLimitPct: number = 5.0
   ) => {
     const key = `analyze_${symbol}_${horizons.join(',')}`;
-    
+
     return requestDeduplicator.deduplicate(key, async () => {
       const response = await predictionApi.post('/tools/analyze', {
         symbol,

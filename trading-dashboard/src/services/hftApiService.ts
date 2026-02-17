@@ -17,12 +17,12 @@ import type {
 // Try hft2 direct first (5001), then main backend proxy (8000)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_BACKEND_URL
     || import.meta.env.VITE_HFT_API_URL
-    || 'http://127.0.0.1:5001';  // Direct to hft2 (or 8000 for proxy)
+    || 'http://127.0.0.1:5000';  // Direct to hft2 (or 8000 for proxy)
 
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({
     baseURL: `${API_BASE_URL}/api`,
-    timeout: 30000, // 30 seconds for slower backend responses
+    timeout: 60000, // 60 seconds for bot initialization
     headers: {
         'Content-Type': 'application/json',
     },
@@ -79,7 +79,7 @@ export const hftApiService = {
     // ===== Complete Bot Data =====
     async getBotData(): Promise<HftBotData> {
         try {
-            const response = await api.get<HftBotData>('/bot-data');
+            const response = await api.get<HftBotData>('/bot-data', { timeout: 15000 }); // 15 seconds for bot data
             return response.data;
         } catch (error) {
             console.error('Error getting bot data:', error);
@@ -218,6 +218,17 @@ export const hftApiService = {
         }
     },
 
+    async startBotWithSymbol(symbol: string): Promise<any> {
+        try {
+            // Use longer timeout for bot initialization
+            const response = await api.post('/bot/start-with-symbol', { symbol }, { timeout: 10000 }); // 10 seconds - should return quickly
+            return response.data;
+        } catch (error) {
+            console.error('Error starting bot with symbol:', error);
+            throw error;
+        }
+    },
+
     async stopBot(): Promise<{ message: string }> {
         try {
             const response = await api.post<{ message: string }>('/bot/stop');
@@ -252,7 +263,7 @@ export const hftApiService = {
     // ===== Live Trading Status =====
     async getLiveStatus(): Promise<HftLiveStatus> {
         try {
-            const response = await api.get<HftLiveStatus>('/live-status');
+            const response = await api.get<HftLiveStatus>('/live-status', { timeout: 10000 }); // 10 seconds for live status
             return response.data;
         } catch (error) {
             console.error('Error getting live status:', error);

@@ -68,7 +68,7 @@ const Navbar = ({ activeTab, onTabChange, onMenuClick, showAssetTabs = false }: 
 
           {/* Tab Switcher - Responsive with tooltips - Only show when showAssetTabs is true */}
           {showAssetTabs && (
-            <div className={`hidden sm:flex gap-0.5 sm:gap-1 rounded p-0.5 ${isLight ? 'bg-gray-100' : isSpace ? 'bg-slate-800/60 backdrop-blur-sm' : 'bg-slate-700'
+            <div className={`flex gap-0.5 sm:gap-1 rounded p-0.5 ${isLight ? 'bg-gray-100' : isSpace ? 'bg-slate-800/60 backdrop-blur-sm' : 'bg-slate-700'
               }`}>
               {(['stocks', 'crypto', 'commodities'] as const).map((tab) => (
                 <button
@@ -87,7 +87,7 @@ const Navbar = ({ activeTab, onTabChange, onMenuClick, showAssetTabs = false }: 
                     }`}
                   title={tab.charAt(0).toUpperCase() + tab.slice(1)}
                 >
-                  <span className="hidden sm:inline">{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
+                  <span className="inline">{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
                 </button>
               ))}
             </div>

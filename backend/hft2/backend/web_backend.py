@@ -275,6 +275,20 @@ except ImportError as e:
     print(f"Error importing trading bot components: {e}")
     print("Make sure testindia.py is in the same directory. Auth/signup will work; bot features may be limited.")
 
+# Fix: Alias StockTradingBot to WebTradingBot if imported
+if StockTradingBot:
+    WebTradingBot = StockTradingBot
+else:
+    class WebTradingBot:
+        def __init__(self, config):
+            self.config = config
+            self.portfolio = {}
+            self.executor = None
+        def get_portfolio_metrics(self): return {}
+        def start(self): pass
+        def stop(self): pass
+
+
 # Pydantic Models for Request/Response validation
 
 
@@ -355,6 +369,10 @@ class ScanRequest(BaseModel):
     sort_by: Optional[str] = "score"
     limit: Optional[int] = 50
     natural_query: Optional[str] = ""
+
+
+class StartBotWithSymbolRequest(BaseModel):
+    symbol: str
 
 
 class PortfolioMetrics(BaseModel):
@@ -469,7 +487,6 @@ except Exception as e:
 
 # Logger already configured above
 
-
 # Initialize FastAPI app
 app = FastAPI(
     title="Indian Stock Trading Bot API",
@@ -571,6 +588,36 @@ async def general_exception_handler(request, exc: Exception):
 trading_bot = None
 bot_thread = None
 bot_running = False
+
+
+def _offline_bot_data():
+    """Return valid bot-data shape when bot is not initialized so frontend shows offline state instead of 500."""
+    saved = {}
+    try:
+        mode = get_current_saved_mode()
+        saved = load_config_from_file(mode) or {}
+    except Exception:
+        pass
+    return {
+        "isRunning": False,
+        "config": {
+            "mode": saved.get("mode", "paper"),
+            "tickers": saved.get("tickers", []),
+            "stopLossPct": saved.get("stop_loss_pct", 0.05),
+            "maxAllocation": saved.get("max_capital_per_trade", 0.25),
+            "maxTradeLimit": saved.get("max_trade_limit", 10),
+        },
+        "portfolio": {
+            "totalValue": 10000,
+            "cash": 10000,
+            "holdings": {},
+            "startingBalance": 10000,
+            "unrealizedPnL": 0,
+            "realizedPnL": 0,
+            "tradeLog": [],
+        },
+        "lastUpdate": datetime.now().isoformat(),
+    }
 
 # MCP components
 mcp_server = None
@@ -1473,13 +1520,23 @@ class WebTradingBot:
     def _initialize_live_trading(self):
         """Initialize live trading components"""
         try:
-            # Get Dhan credentials from environment variables
-            dhan_client_id = os.getenv("DHAN_CLIENT_ID")
-            dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
+            # Get Dhan credentials from environment variables (load from env file first)
+            try:
+                from dhan_client import get_dhan_token, get_dhan_client_id
+                dhan_access_token = get_dhan_token()
+                dhan_client_id = get_dhan_client_id()
+            except ImportError:
+                # Fallback to direct env access
+                from dotenv import load_dotenv
+                load_dotenv()
+                dhan_client_id = os.getenv("DHAN_CLIENT_ID")
+                dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
 
             if not dhan_client_id or not dhan_access_token:
                 logger.error(
-                    "Dhan credentials not found in environment variables")
+                    "Dhan credentials not found. Check backend/hft2/env file or environment variables.")
+                logger.error(f"DHAN_CLIENT_ID: {'SET' if dhan_client_id else 'MISSING'}")
+                logger.error(f"DHAN_ACCESS_TOKEN: {'SET' if dhan_access_token else 'MISSING'}")
                 return False
 
             logger.info(
@@ -1500,11 +1557,11 @@ class WebTradingBot:
             self.live_executor = LiveTradingExecutor(
                 portfolio_manager=self.portfolio_manager,  # Use database portfolio manager
                 config={
-                    "dhan_client_id": os.getenv("DHAN_CLIENT_ID"),
-                    "dhan_access_token": os.getenv("DHAN_ACCESS_TOKEN"),
-                    "stop_loss_pct": 0.05,
-                    "max_capital_per_trade": 0.25,
-                    "max_trade_limit": 150
+                    "dhan_client_id": dhan_client_id,
+                    "dhan_access_token": dhan_access_token,
+                    "stop_loss_pct": self.config.get("stop_loss_pct", 0.05),
+                    "max_capital_per_trade": self.config.get("max_capital_per_trade", 0.25),
+                    "max_trade_limit": self.config.get("max_trade_limit", 150)
                 }
             )
 
@@ -1808,71 +1865,154 @@ class WebTradingBot:
 
         try:
             # Live mode: prefer in-memory portfolio from LiveTradingExecutor (Dhan)
-            if self.config.get("mode", "paper") == "live" and getattr(self, "live_executor", None) and getattr(self.live_executor, "portfolio", None):
-                pf = self.live_executor.portfolio
-                cash = float(getattr(pf, "cash", 0.0))
-                starting_balance = float(getattr(pf, "starting_balance", cash))
-                raw_holdings = getattr(pf, "holdings", {}) or {}
-
-                # Normalize holdings to expected structure {ticker: {qty, avg_price}}
-                holdings = {}
-                for ticker, h in (raw_holdings.items() if isinstance(raw_holdings, dict) else []):
-                    qty = h.get("qty") if "qty" in h else h.get(
-                        "quantity", h.get("Quantity", 0))
-                    avg_price = h.get("avg_price") if "avg_price" in h else h.get(
-                        "avgPrice", h.get("avg_cost_price", h.get("avgCostPrice", 0)))
-                    current_price = h.get(
-                        "current_price", h.get("currentPrice", avg_price))
-                    if qty and avg_price is not None:
-                        holdings[ticker] = {
-                            "qty": float(qty),
-                            "avg_price": float(avg_price),
-                            "currentPrice": float(current_price) if current_price is not None else float(avg_price)
+            current_mode = self.config.get("mode", "paper")
+            logger.debug(f"get_portfolio_metrics: current_mode={current_mode}")
+            
+            if current_mode == "live":
+                # CRITICAL: Fetch REAL-TIME data directly from Dhan API first (not cached database)
+                # Note: This is called from get_complete_bot_data() which runs in executor
+                # If Dhan API is slow, the endpoint-level fetch (in get_bot_data) should handle it
+                logger.info("🔄 Live mode: Fetching REAL-TIME data from Dhan API...")
+                
+                # PRIMARY: Fetch directly from Dhan API for real-time data
+                # Use a quick version without Fyers LTP updates to avoid blocking
+                try:
+                    from dhan_client import get_live_portfolio
+                    # get_live_portfolio() may be slow due to Fyers LTP calls
+                    # But we'll try it anyway - if it times out, endpoint will handle fallback
+                    dhan_portfolio = get_live_portfolio()
+                    if dhan_portfolio:
+                        logger.info(f"✅ Fetched REAL-TIME portfolio from Dhan API: cash={dhan_portfolio.get('cash', 0)}, holdings={len(dhan_portfolio.get('holdings', {}))}")
+                        # Use helper function to convert Dhan portfolio
+                        portfolio_data = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=False)
+                        
+                        # Extract values for metrics calculation
+                        cash = portfolio_data["cash"]
+                        holdings = portfolio_data["holdings"]
+                        total_value = portfolio_data["totalValue"]
+                        starting_balance = portfolio_data["startingBalance"]
+                        unrealized_pnl = portfolio_data["unrealizedPnL"]
+                        realized_pnl = 0.0
+                        total_return = unrealized_pnl + realized_pnl
+                        current_market_value = total_value - cash
+                        total_exposure = sum(h["qty"] * h["avg_price"] for h in holdings.values())
+                        
+                        logger.info(f"📊 REAL-TIME portfolio metrics: cash={cash}, holdings={len(holdings)}, total_value={total_value}, unrealized_pnl={unrealized_pnl}")
+                        
+                        return {
+                            "total_value": round(total_value, 2),
+                            "cash": round(cash, 2),
+                            "cash_percentage": round((cash / total_value * 100) if total_value > 0 else 100, 2),
+                            "holdings": holdings,
+                            "total_invested": round(total_exposure, 2),
+                            "invested_percentage": round((total_exposure / total_value * 100) if total_value > 0 else 0, 2),
+                            "current_holdings_value": round(current_market_value, 2),
+                            "total_return": round(total_return, 2),
+                            "total_return_pct": round((total_return / starting_balance * 100) if starting_balance > 0 else 0, 2),
+                            "unrealized_pnl": round(unrealized_pnl, 2),
+                            "unrealized_pnl_pct": round((unrealized_pnl / total_exposure * 100) if total_exposure > 0 else 0, 2),
+                            "realized_pnl": round(realized_pnl, 2),
+                            "realized_pnl_pct": round((realized_pnl / starting_balance * 100) if starting_balance > 0 else 0, 2),
+                            "total_exposure": round(total_exposure, 2),
+                            "exposure_ratio": round((total_exposure / total_value * 100) if total_value > 0 else 0, 2),
+                            "profit_loss": round(total_return, 2),
+                            "profit_loss_pct": round((total_return / starting_balance * 100) if starting_balance > 0 else 0, 2),
+                            "positions": len(holdings),
+                            "trades_today": 0,
+                            "initial_balance": round(starting_balance, 2)
                         }
-
-                # Compute market value and P&L
-                current_market_value = sum(
-                    data["qty"] * data.get("currentPrice", data["avg_price"]) for data in holdings.values())
-                total_exposure = sum(data["qty"] * data["avg_price"]
-                                     for data in holdings.values())
-                unrealized_pnl = current_market_value - total_exposure
-                total_value = cash + current_market_value
-
-                total_invested = total_exposure
-                cash_percentage = (cash / total_value) * \
-                    100 if total_value > 0 else 100
-                invested_percentage = (
-                    total_invested / total_value) * 100 if total_value > 0 else 0
-                unrealized_pnl_pct = (
-                    unrealized_pnl / total_invested) * 100 if total_invested > 0 else 0
-                realized_pnl = float(getattr(pf, "realized_pnl", 0.0))
-                realized_pnl_pct = (
-                    realized_pnl / starting_balance) * 100 if starting_balance > 0 else 0
-                total_return = unrealized_pnl + realized_pnl
-                total_return_pct = (
-                    total_return / starting_balance) * 100 if starting_balance > 0 else 0
-
+                    else:
+                        logger.warning("⚠️ Dhan API returned None - falling back to database")
+                except Exception as dhan_fetch_err:
+                    logger.warning(f"⚠️ Failed to fetch REAL-TIME data from Dhan API: {dhan_fetch_err} - falling back to database")
+                
+                # FALLBACK: If Dhan API fails, try database (but log that it's cached data)
+                if hasattr(self, "portfolio_manager") and self.portfolio_manager:
+                    try:
+                        session = self.portfolio_manager.db.Session()
+                        try:
+                            from db.database import Portfolio, Holding
+                            portfolio = session.query(Portfolio).filter_by(mode='live').first()
+                            if portfolio:
+                                holdings_query = session.query(Holding).filter_by(portfolio_id=portfolio.id).all()
+                                
+                                cash = float(portfolio.cash or 0.0)
+                                starting_balance = float(portfolio.starting_balance or cash)
+                                
+                                holdings = {}
+                                for holding in holdings_query:
+                                    ticker = holding.ticker
+                                    qty = float(holding.quantity or 0)
+                                    avg_price = float(holding.avg_price or 0)
+                                    current_price = float(holding.last_price or avg_price)
+                                    
+                                    if qty > 0 and avg_price > 0:
+                                        holdings[ticker] = {
+                                            "qty": qty,
+                                            "avg_price": avg_price,
+                                            "currentPrice": current_price,
+                                            "quantity": qty
+                                        }
+                                
+                                current_market_value = sum(h["qty"] * h.get("currentPrice", h["avg_price"]) for h in holdings.values())
+                                total_exposure = sum(h["qty"] * h["avg_price"] for h in holdings.values())
+                                unrealized_pnl = float(portfolio.unrealized_pnl or (current_market_value - total_exposure))
+                                realized_pnl = float(portfolio.realized_pnl or 0.0)
+                                total_value = cash + current_market_value
+                                total_return = unrealized_pnl + realized_pnl
+                                
+                                logger.warning(f"⚠️ Using CACHED database data (Dhan API unavailable): cash={cash}, holdings={len(holdings)}")
+                                
+                                return {
+                                    "total_value": round(total_value, 2),
+                                    "cash": round(cash, 2),
+                                    "cash_percentage": round((cash / total_value * 100) if total_value > 0 else 100, 2),
+                                    "holdings": holdings,
+                                    "total_invested": round(total_exposure, 2),
+                                    "invested_percentage": round((total_exposure / total_value * 100) if total_value > 0 else 0, 2),
+                                    "current_holdings_value": round(current_market_value, 2),
+                                    "total_return": round(total_return, 2),
+                                    "total_return_pct": round((total_return / starting_balance * 100) if starting_balance > 0 else 0, 2),
+                                    "unrealized_pnl": round(unrealized_pnl, 2),
+                                    "unrealized_pnl_pct": round((unrealized_pnl / total_exposure * 100) if total_exposure > 0 else 0, 2),
+                                    "realized_pnl": round(realized_pnl, 2),
+                                    "realized_pnl_pct": round((realized_pnl / starting_balance * 100) if starting_balance > 0 else 0, 2),
+                                    "total_exposure": round(total_exposure, 2),
+                                    "exposure_ratio": round((total_exposure / total_value * 100) if total_value > 0 else 0, 2),
+                                    "profit_loss": round(total_return, 2),
+                                    "profit_loss_pct": round((total_return / starting_balance * 100) if starting_balance > 0 else 0, 2),
+                                    "positions": len(holdings),
+                                    "trades_today": 0,
+                                    "initial_balance": round(starting_balance, 2)
+                                }
+                        finally:
+                            session.close()
+                    except Exception as db_err:
+                        logger.warning(f"Failed to get portfolio from database: {db_err}")
+                
+                # If all else fails, return empty portfolio
+                logger.error("❌ Live mode: No data available from Dhan API or database")
                 return {
-                    "total_value": round(total_value, 2),
-                    "cash": round(cash, 2),
-                    "cash_percentage": round(cash_percentage, 2),
-                    "holdings": holdings,
-                    "total_invested": round(total_invested, 2),
-                    "invested_percentage": round(invested_percentage, 2),
-                    "current_holdings_value": round(current_market_value, 2),
-                    "total_return": round(total_return, 2),
-                    "total_return_pct": round(total_return_pct, 2),
-                    "unrealized_pnl": round(unrealized_pnl, 2),
-                    "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
-                    "realized_pnl": round(realized_pnl, 2),
-                    "realized_pnl_pct": round(realized_pnl_pct, 2),
-                    "total_exposure": round(total_exposure, 2),
-                    "exposure_ratio": round((total_exposure / total_value) * 100, 2) if total_value > 0 else 0,
-                    "profit_loss": round(total_return, 2),
-                    "profit_loss_pct": round(total_return_pct, 2),
-                    "positions": len(holdings),
+                    "total_value": 0.0,
+                    "cash": 0.0,
+                    "cash_percentage": 100.0,
+                    "holdings": {},
+                    "total_invested": 0.0,
+                    "invested_percentage": 0.0,
+                    "current_holdings_value": 0.0,
+                    "total_return": 0.0,
+                    "total_return_pct": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "unrealized_pnl_pct": 0.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_pct": 0.0,
+                    "total_exposure": 0.0,
+                    "exposure_ratio": 0.0,
+                    "profit_loss": 0.0,
+                    "profit_loss_pct": 0.0,
+                    "positions": 0,
                     "trades_today": 0,
-                    "initial_balance": round(starting_balance, 2)
+                    "initial_balance": 0.0
                 }
 
             # FIXED: Read from the correct Indian trading bot portfolio files
@@ -2353,18 +2493,116 @@ def apply_risk_level_settings(bot, risk_level, custom_stop_loss=None, custom_all
         logger.error(f"Error applying risk level settings: {e}")
 
 
-def load_config_from_file(mode: str) -> dict:
-    """Load configuration from the appropriate JSON file"""
+def _get_settings_data_dir():
+    """Data dir for config files (same as save_config_to_file): backend/hft2/data."""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_dir)
+    return os.path.join(project_root, "data")
+
+
+def get_current_saved_mode() -> str:
+    """Return the mode last saved by the user (paper/live). Used so GET settings and bot-data reflect saved choice."""
     try:
-        import os
+        data_dir = _get_settings_data_dir()
+        path = os.path.join(data_dir, "current_mode.txt")
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                mode = (f.read() or "").strip().lower()
+            if mode in ("paper", "live"):
+                return mode
+    except Exception:
+        pass
+    return os.getenv("MODE", "paper")
+
+
+def _convert_dhan_portfolio_to_bot_data(dhan_portfolio: dict, include_config: bool = True) -> dict:
+    """Helper function to convert Dhan portfolio dict to bot data format. Reduces code duplication."""
+    cash = float(dhan_portfolio.get("cash", 0))
+    holdings_dict = dhan_portfolio.get("holdings", {})
+    holdings = {}
+    
+    for ticker, h in holdings_dict.items():
+        qty = float(h.get("quantity", 0))
+        avg_price = float(h.get("avgPrice", 0))
+        current_price = float(h.get("currentPrice", avg_price))
+        if qty > 0:
+            holdings[ticker] = {
+                "qty": qty,
+                "avg_price": avg_price,
+                "currentPrice": current_price,
+                "quantity": qty
+            }
+    
+    current_market_value = sum(h["qty"] * h.get("currentPrice", h["avg_price"]) for h in holdings.values())
+    total_value = cash + current_market_value
+    starting_balance = float(dhan_portfolio.get("startingBalance", total_value))
+    unrealized_pnl = current_market_value - sum(h["qty"] * h["avg_price"] for h in holdings.values())
+    
+    portfolio_data = {
+        "totalValue": round(total_value, 2),
+        "cash": round(cash, 2),
+        "holdings": holdings,
+        "startingBalance": round(starting_balance, 2),
+        "unrealizedPnL": round(unrealized_pnl, 2),
+        "realizedPnL": 0,
+        "tradeLog": []
+    }
+    
+    if include_config:
+        # Get bot config if trading_bot exists
+        if trading_bot:
+            try:
+                portfolio_data["tradeLog"] = getattr(trading_bot, 'trade_log', [])[-10:] if hasattr(trading_bot, 'trade_log') else []
+                return {
+                    "isRunning": trading_bot.is_running,
+                    "config": {
+                        "mode": trading_bot.config.get("mode", "live"),
+                        "tickers": trading_bot.config.get("tickers", []),
+                        "stopLossPct": trading_bot.config.get("stop_loss_pct", 0.05),
+                        "maxAllocation": trading_bot.config.get("max_allocation", 0.25),
+                        "maxTradeLimit": trading_bot.config.get("max_trade_limit", 10)
+                    },
+                    "portfolio": portfolio_data,
+                    "lastUpdate": datetime.now().isoformat()
+                }
+            except:
+                pass
+        
+        # Fallback config when bot not initialized
+        return {
+            "isRunning": False,
+            "config": {
+                "mode": "live",
+                "tickers": list(holdings.keys()),
+                "stopLossPct": 0.05,
+                "maxAllocation": 0.25,
+                "maxTradeLimit": 10
+            },
+            "portfolio": portfolio_data,
+            "lastUpdate": datetime.now().isoformat()
+        }
+    
+    return portfolio_data
+
+
+def set_current_saved_mode(mode: str) -> None:
+    """Persist the chosen mode so GET settings and bot-data return it."""
+    try:
+        data_dir = _get_settings_data_dir()
+        os.makedirs(data_dir, exist_ok=True)
+        path = os.path.join(data_dir, "current_mode.txt")
+        with open(path, "w") as f:
+            f.write(mode)
+    except Exception as e:
+        logger.warning(f"Could not save current_mode: {e}")
+
+
+def load_config_from_file(mode: str) -> dict:
+    """Load configuration from the appropriate JSON file (backend/hft2/data)."""
+    try:
         import json
 
-        # Get the data directory path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        data_dir = os.path.join(project_root, "data")
-
-        # Determine the config file path
+        data_dir = _get_settings_data_dir()
         config_file = os.path.join(data_dir, f"{mode}_config.json")
 
         if os.path.exists(config_file):
@@ -2385,13 +2623,34 @@ def initialize_bot():
     """Initialize the trading bot with schema-validated configuration"""
     global trading_bot
 
+    print("--- STARTING BOT INITIALIZATION ---")
     try:
-        # Load environment variables
-        from dotenv import load_dotenv
-        load_dotenv()
+        import traceback
 
-        # Get trading mode from environment
-        default_mode = os.getenv("MODE", "paper")
+        # Load environment variables from backend/hft2/env file
+        from dotenv import load_dotenv
+        import os
+        # Try to load from backend/hft2/env first
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        env_file = os.path.join(os.path.dirname(current_dir), "env")
+        if os.path.exists(env_file):
+            load_dotenv(env_file)
+            logger.info(f"Loaded env from {env_file}")
+        else:
+            # Fallback to default .env loading
+            load_dotenv()
+        
+        # Also ensure dhan_client loads the env file
+        try:
+            from dhan_client import _load_env
+            _load_env()
+        except:
+            pass
+
+        # Get trading mode from saved user preference, fallback to env
+        saved_mode = get_current_saved_mode()
+        default_mode = saved_mode if saved_mode in ("paper", "live") else os.getenv("MODE", "paper")
+        logger.info(f"Initializing bot with mode: {default_mode} (saved: {saved_mode})")
 
         # Load and validate configuration using schema
         if CONFIG_SCHEMA_AVAILABLE:
@@ -2422,10 +2681,18 @@ def initialize_bot():
                 # Risk management settings - will be set by risk level
                 "stop_loss_pct": 0.05,  # Default 5% (MEDIUM)
                 "max_capital_per_trade": 0.25,  # Default 25% (MEDIUM)
-                "max_trade_limit": 150
+                "max_trade_limit": 150,
+                # New keys required by StockTradingBot
+                "capital": 10000,
+                "margin": 0,
+                "max_drawdown_pct": 0.1,
+                "target_profit_pct": 0.1,
+                "use_risk_reward": True,
+                "risk_reward_ratio": 2.0
             }
 
             # Load saved configuration from file and merge with defaults
+            # Use saved mode to load the correct config file
             saved_config = load_config_from_file(default_mode)
             if saved_config:
                 # Update config with saved values, keeping defaults for missing keys
@@ -2433,13 +2700,16 @@ def initialize_bot():
                 dhan_client_id = os.getenv("DHAN_CLIENT_ID")
                 dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
 
+                # Ensure mode from saved config takes precedence
+                saved_mode = saved_config.get("mode", default_mode)
                 config.update({
-                    "mode": saved_config.get("mode", config["mode"]),
+                    "mode": saved_mode,  # Use saved mode
                     "riskLevel": saved_config.get("riskLevel", config["riskLevel"]),
                     "stop_loss_pct": saved_config.get("stop_loss_pct", config["stop_loss_pct"]),
                     "max_capital_per_trade": saved_config.get("max_capital_per_trade", config["max_capital_per_trade"]),
                     "max_trade_limit": saved_config.get("max_trade_limit", config["max_trade_limit"])
                 })
+                logger.info(f"Loaded saved config with mode: {saved_mode}")
 
                 # Ensure Dhan credentials are always set from environment variables
                 if dhan_client_id:
@@ -2473,7 +2743,10 @@ def initialize_bot():
 
     except Exception as e:
         logger.error(f"Error initializing trading bot: {e}")
-        raise
+        print(f"CRITICAL INITIALIZATION ERROR: {e}")
+        traceback.print_exc()
+        # raise  # Don't raise in thread, just log
+
 
 
 # Static file serving
@@ -2868,12 +3141,74 @@ async def get_configuration_schema():
 
 @app.get("/api/bot-data")
 async def get_bot_data():
-    """Get complete bot data for React frontend"""
+    """Get complete bot data for React frontend. Returns offline payload when bot not initialized."""
     try:
+        # Check saved mode first (in case bot not initialized yet)
+        saved_mode = get_current_saved_mode() or "paper"
+        
         if trading_bot:
-            return trading_bot.get_complete_bot_data()
-        else:
-            raise HTTPException(status_code=500, detail="Bot not initialized")
+            current_mode = trading_bot.config.get("mode", saved_mode)
+            
+            # For live mode, fetch REAL-TIME data directly from Dhan API in async endpoint
+            if current_mode == "live":
+                try:
+                    logger.info("🔄 Live mode: Fetching REAL-TIME data from Dhan API in endpoint...")
+                    from dhan_client import get_live_portfolio
+                    loop = asyncio.get_event_loop()
+                    
+                    # Fetch Dhan data with timeout
+                    dhan_portfolio = await asyncio.wait_for(
+                        loop.run_in_executor(None, get_live_portfolio),
+                        timeout=10.0  # 10 second timeout for Dhan API
+                    )
+                    
+                    if dhan_portfolio:
+                        logger.info(f"✅ Fetched REAL-TIME Dhan data: cash={dhan_portfolio.get('cash', 0)}, holdings={len(dhan_portfolio.get('holdings', {}))}")
+                        # Use helper function to convert Dhan portfolio to bot data format
+                        return _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
+                    else:
+                        logger.warning("⚠️ Dhan API returned None - falling back to get_complete_bot_data")
+                except asyncio.TimeoutError:
+                    logger.error("❌ Dhan API fetch timed out after 10s - falling back to cached data")
+                except Exception as dhan_err:
+                    logger.error(f"❌ Dhan API fetch failed: {dhan_err} - falling back to cached data")
+            
+            # For paper mode or if Dhan fetch failed, use regular get_complete_bot_data
+            try:
+                loop = asyncio.get_event_loop()
+                bot_data = await asyncio.wait_for(
+                    loop.run_in_executor(None, trading_bot.get_complete_bot_data),
+                    timeout=8.0  # 8 second timeout
+                )
+                return bot_data
+            except asyncio.TimeoutError:
+                logger.error("get_complete_bot_data timed out after 8s")
+                return _offline_bot_data()
+        
+        # Bot not initialized - but if in live mode, try to fetch Dhan data directly
+        if saved_mode == "live":
+            try:
+                logger.info("Bot not initialized but live mode requested - fetching Dhan data directly")
+                from dhan_client import get_live_portfolio
+                loop = asyncio.get_event_loop()
+                try:
+                    dhan_portfolio = await asyncio.wait_for(
+                        loop.run_in_executor(None, get_live_portfolio),
+                        timeout=5.0  # 5 second timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Dhan fetch timed out when bot not initialized")
+                    dhan_portfolio = None
+                
+                if dhan_portfolio:
+                    # Use helper function to convert Dhan portfolio to bot data format
+                    return _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
+            except asyncio.TimeoutError:
+                logger.warning("Dhan fetch timed out - returning offline data")
+            except Exception as dhan_err:
+                logger.warning(f"Failed to fetch Dhan data when bot not initialized: {dhan_err}")
+        
+        return _offline_bot_data()
     except Exception as e:
         logger.error(f"Error getting bot data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3113,6 +3448,75 @@ async def update_watchlist(request: WatchlistRequest):
         raise
     except Exception as e:
         logger.error(f"Error updating watchlist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/watchlist/add/{ticker}", response_model=WatchlistResponse)
+async def add_to_watchlist(ticker: str):
+    """Add ticker to watchlist via path parameter"""
+    try:
+        ticker = ticker.upper().strip()
+        if not ticker:
+            raise HTTPException(status_code=400, detail="Ticker is required")
+
+        if not trading_bot:
+            raise HTTPException(status_code=500, detail="Bot not initialized")
+            
+        current_tickers = trading_bot.config["tickers"]
+        
+        if ticker not in current_tickers:
+            current_tickers.append(ticker)
+            message = f"Added {ticker} to watchlist"
+            logger.info(message)
+            
+            # Update data feed if it exists
+            if DataFeed:
+                try:
+                    trading_bot.data_feed = DataFeed(current_tickers)
+                except Exception as e:
+                    logger.warning(f"Failed to update data feed: {e}")
+        else:
+            message = f"{ticker} is already in watchlist"
+            
+        return WatchlistResponse(message=message, tickers=current_tickers)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding to watchlist: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/watchlist/remove/{ticker}", response_model=WatchlistResponse)
+async def remove_from_watchlist(ticker: str):
+    """Remove ticker from watchlist via path parameter"""
+    try:
+        ticker = ticker.upper().strip()
+        if not trading_bot:
+            raise HTTPException(status_code=500, detail="Bot not initialized")
+            
+        current_tickers = trading_bot.config["tickers"]
+        
+        if ticker in current_tickers:
+            current_tickers.remove(ticker)
+            message = f"Removed {ticker} from watchlist"
+            logger.info(message)
+            
+            # Update data feed if it exists
+            if DataFeed:
+                try:
+                    trading_bot.data_feed = DataFeed(current_tickers)
+                except Exception as e:
+                    logger.warning(f"Failed to update data feed: {e}")
+        else:
+            message = f"{ticker} is not in watchlist"
+            
+        return WatchlistResponse(message=message, tickers=current_tickers)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing from watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3484,9 +3888,188 @@ async def stop_bot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/bot/start-with-symbol")
+async def start_bot_with_symbol(request: StartBotWithSymbolRequest):
+    """Start bot with a symbol: add to watchlist, start bot, trigger prediction and analysis"""
+    try:
+        global trading_bot
+        symbol = request.symbol.upper().strip()
+        
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Symbol is required")
+        
+        # Initialize bot if not already initialized (run in executor to avoid blocking)
+        if not trading_bot:
+            try:
+                # Run synchronous initialize_bot in thread pool executor
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, initialize_bot)
+                logger.info("Bot initialized before starting with symbol")
+            except Exception as init_error:
+                logger.error(f"Failed to initialize bot: {init_error}")
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to initialize bot: {str(init_error)}")
+        
+        if not trading_bot:
+            raise HTTPException(status_code=500, detail="Bot not initialized")
+        
+        # Add symbol to watchlist if not already present
+        current_tickers = trading_bot.config.get("tickers", [])
+        if symbol not in current_tickers:
+            current_tickers.append(symbol)
+            trading_bot.config["tickers"] = current_tickers
+            logger.info(f"Added {symbol} to watchlist")
+            
+            # Update data feed if it exists
+            try:
+                try:
+                    from data_feed import DataFeed
+                except ImportError:
+                    import sys
+                    import os
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    if current_dir not in sys.path:
+                        sys.path.insert(0, current_dir)
+                    from data_feed import DataFeed
+                if DataFeed:
+                    trading_bot.data_feed = DataFeed(current_tickers)
+            except Exception as e:
+                logger.warning(f"Failed to update data feed: {e}")
+        
+        # Apply current risk level settings before starting
+        risk_level = trading_bot.config.get("riskLevel", "MEDIUM")
+        apply_risk_level_settings(trading_bot, risk_level)
+        
+        # Start the bot if not already running
+        if not trading_bot.is_running:
+            trading_bot.start()
+            logger.info(f"Trading bot started with symbol {symbol}")
+        
+        # Trigger ALL HFT2 backend components: prediction, analysis, data fetching
+        async def trigger_all_hft2_components():
+            try:
+                logger.info(f"🚀 Starting HFT2 backend process for {symbol}...")
+                prediction_result = None
+                analysis_result = None
+                
+                # 1. Fetch live data from Fyers data service (if available)
+                try:
+                    from fyers_client import get_fyers_client
+                    fyers = get_fyers_client()
+                    if fyers:
+                        try:
+                            # Get current price from Fyers
+                            current_price = fyers.get_price(symbol)
+                            if current_price:
+                                logger.info(f"✅ Fetched live price from Fyers for {symbol}: ₹{current_price}")
+                        except Exception as fyers_err:
+                            logger.warning(f"⚠️ Fyers data fetch failed for {symbol}: {fyers_err}")
+                except Exception as fyers_init_err:
+                    logger.debug(f"Fyers client not available: {fyers_init_err}")
+                
+                # 2. Fetch historical data from Yahoo Finance (via testindia.py or data service)
+                try:
+                    import yfinance as yf
+                    stock = yf.Ticker(symbol.replace(".NS", "").replace(".BO", ""))
+                    hist_data = stock.history(period="1mo")
+                    if not hist_data.empty:
+                        logger.info(f"✅ Fetched historical data from Yahoo Finance for {symbol}: {len(hist_data)} days")
+                except Exception as yahoo_err:
+                    logger.warning(f"⚠️ Yahoo Finance historical data fetch failed: {yahoo_err}")
+                
+                # 3. Trigger MCP prediction if available
+                if MCP_AVAILABLE:
+                    await _ensure_mcp_initialized()
+                    if mcp_trading_agent:
+                        try:
+                            logger.info(f"📊 Triggering MCP prediction for {symbol}...")
+                            from mcp_server.tools.prediction_tool import PredictionTool
+                            prediction_tool = PredictionTool({
+                                "tool_id": "prediction_tool",
+                                "ollama_enabled": True,
+                                "ollama_host": "http://localhost:11434",
+                                "ollama_model": "llama3.1:8b"
+                            })
+                            session_id = str(int(time.time() * 1000000))
+                            pred_result = await prediction_tool.rank_predictions({
+                                "symbols": [symbol],
+                                "models": ["rl"],
+                                "horizon": "day",
+                                "include_explanations": True
+                            }, session_id)
+                            if pred_result.status == "SUCCESS":
+                                prediction_result = pred_result.data
+                                logger.info(f"✅ Prediction completed for {symbol}: {prediction_result}")
+                            else:
+                                logger.warning(f"⚠️ Prediction returned status: {pred_result.status}")
+                        except Exception as pred_error:
+                            logger.warning(f"⚠️ Prediction failed for {symbol}: {pred_error}")
+                            logger.exception("Prediction error traceback:")
+                
+                # 4. Trigger comprehensive analysis if available
+                if MCP_AVAILABLE and mcp_trading_agent:
+                    try:
+                        logger.info(f"🔍 Triggering comprehensive analysis for {symbol}...")
+                        signal = await mcp_trading_agent.analyze_and_decide(
+                            symbol=symbol,
+                            market_context={
+                                "timeframe": "intraday",
+                                "analysis_type": "comprehensive"
+                            }
+                        )
+                        analysis_result = {
+                            "symbol": signal.symbol,
+                            "recommendation": signal.decision.value,
+                            "confidence": signal.confidence,
+                            "reasoning": signal.reasoning,
+                            "risk_score": signal.risk_score,
+                            "position_size": signal.position_size,
+                            "target_price": signal.target_price,
+                            "stop_loss": signal.stop_loss
+                        }
+                        logger.info(f"✅ Analysis completed for {symbol}: {signal.decision.value} (confidence: {signal.confidence})")
+                    except Exception as analysis_error:
+                        logger.warning(f"⚠️ Analysis failed for {symbol}: {analysis_error}")
+                        logger.exception("Analysis error traceback:")
+                
+                # 5. Update data feed with new symbol
+                try:
+                    if hasattr(trading_bot, 'data_feed') and trading_bot.data_feed:
+                        # Data feed should already be updated above, but ensure it's active
+                        logger.info(f"✅ Data feed updated for {symbol}")
+                except Exception as feed_err:
+                    logger.warning(f"⚠️ Data feed update failed: {feed_err}")
+                
+                logger.info(f"✅ HFT2 backend process completed for {symbol}")
+            except Exception as process_error:
+                logger.error(f"❌ Error in HFT2 backend process for {symbol}: {process_error}")
+                logger.exception("Full traceback:")
+        
+        # Start ALL HFT2 components in background (prediction, analysis, data fetching)
+        asyncio.create_task(trigger_all_hft2_components())
+        
+        # Return immediately
+        return {
+            "status": "success",
+            "message": f"Bot started with symbol {symbol}. Analysis running in background.",
+            "symbol": symbol,
+            "isRunning": trading_bot.is_running,
+            "watchlist": current_tickers,
+            "prediction": None,  # Will be available later via bot-data endpoint
+            "analysis": None,    # Will be available later via bot-data endpoint
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting bot with symbol: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/settings")
 async def get_settings():
-    """Get current settings"""
+    """Get current settings. Returns saved/defaults when bot not initialized."""
     try:
         if trading_bot:
             return {
@@ -3499,8 +4082,18 @@ async def get_settings():
                 "max_capital_per_trade": trading_bot.config.get("max_capital_per_trade", 0.25),
                 "max_trade_limit": trading_bot.config.get("max_trade_limit", 10)
             }
-        else:
-            raise HTTPException(status_code=500, detail="Bot not initialized")
+        mode = get_current_saved_mode()
+        saved = load_config_from_file(mode) or {}
+        return {
+            "mode": saved.get("mode", mode),
+            "riskLevel": saved.get("riskLevel", "MEDIUM"),
+            "stop_loss_pct": saved.get("stop_loss_pct", 0.05),
+            "target_profit_pct": saved.get("target_profit_pct", 0.1),
+            "use_risk_reward": saved.get("use_risk_reward", True),
+            "risk_reward_ratio": saved.get("risk_reward_ratio", 2.0),
+            "max_capital_per_trade": saved.get("max_capital_per_trade", 0.25),
+            "max_trade_limit": saved.get("max_trade_limit", 10),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -3509,17 +4102,12 @@ async def get_settings():
 
 
 def save_config_to_file(mode: str, config_data: dict):
-    """Save configuration to the appropriate JSON file"""
+    """Save configuration to the appropriate JSON file (backend/hft2/data)."""
     try:
-        import os
         import json
 
-        # Get the data directory path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        data_dir = os.path.join(project_root, "data")
-
-        # Determine the config file path
+        data_dir = _get_settings_data_dir()
+        os.makedirs(data_dir, exist_ok=True)
         config_file = os.path.join(data_dir, f"{mode}_config.json")
 
         # Prepare config data for saving
@@ -3548,28 +4136,42 @@ def save_config_to_file(mode: str, config_data: dict):
 
 @app.post("/api/settings", response_model=MessageResponse)
 async def update_settings(request: SettingsRequest):
-    """Update bot settings"""
+    """Update bot settings. When bot not initialized, saves to file for when bot starts."""
     try:
         if trading_bot:
             # Update configuration
             if request.mode is not None:
                 # Handle mode switching
                 old_mode = trading_bot.config.get('mode', 'paper')
-                if request.mode != old_mode:
-                    if trading_bot.switch_trading_mode(request.mode):
+                new_mode = request.mode
+                logger.info(f"Mode change requested: {old_mode} -> {new_mode}")
+                
+                if new_mode != old_mode:
+                    # Switch mode
+                    if trading_bot.switch_trading_mode(new_mode):
                         # Check if the mode actually changed (could have reverted)
                         actual_mode = trading_bot.config.get('mode', 'paper')
-                        if actual_mode != request.mode:
+                        if actual_mode != new_mode:
                             logger.warning(
-                                f"Requested {request.mode} mode but reverted to {actual_mode} mode")
+                                f"Requested {new_mode} mode but reverted to {actual_mode} mode")
+                            # Still save the requested mode to file
+                            save_config_to_file(new_mode, trading_bot.config)
+                            set_current_saved_mode(new_mode)
                         else:
                             logger.info(
-                                f"Successfully switched from {old_mode} to {request.mode} mode")
+                                f"Successfully switched from {old_mode} to {new_mode} mode")
+                            # Ensure mode is persisted
+                            trading_bot.config['mode'] = new_mode
+                            save_config_to_file(new_mode, trading_bot.config)
+                            set_current_saved_mode(new_mode)
                     else:
+                        logger.error(f"Failed to switch to {new_mode} mode")
                         raise HTTPException(
-                            status_code=400, detail=f"Failed to switch to {request.mode} mode")
+                            status_code=400, detail=f"Failed to switch to {new_mode} mode. Check Dhan credentials.")
                 else:
-                    trading_bot.config['mode'] = request.mode
+                    # Mode unchanged, but ensure it's set correctly
+                    trading_bot.config['mode'] = new_mode
+                    logger.info(f"Mode unchanged: {new_mode}")
             if request.riskLevel is not None:
                 trading_bot.config['riskLevel'] = request.riskLevel
                 # Apply risk level settings dynamically
@@ -3599,11 +4201,6 @@ async def update_settings(request: SettingsRequest):
                     trading_bot.executor.max_capital_per_trade = request.max_capital_per_trade
             if request.max_trade_limit is not None:
                 trading_bot.config['max_trade_limit'] = request.max_trade_limit
-            if request.stop_loss_pct is not None:
-                trading_bot.config['stop_loss_pct'] = request.stop_loss_pct
-                # Update executor if it exists
-                if hasattr(trading_bot, 'executor') and trading_bot.executor:
-                    trading_bot.executor.stop_loss_pct = request.stop_loss_pct
 
             # Handle target profit settings
             if request.target_profit_pct is not None:
@@ -3625,6 +4222,70 @@ async def update_settings(request: SettingsRequest):
             # Save the updated configuration to the appropriate config file
             current_mode = trading_bot.config.get('mode', 'paper')
             save_config_to_file(current_mode, trading_bot.config)
+            set_current_saved_mode(current_mode)
+
+            # If switching to live mode, immediately fetch Dhan credentials and portfolio data
+            if current_mode == 'live':
+                async def fetch_dhan_data_immediately():
+                    try:
+                        logger.info("🔄 Switching to live mode - fetching Dhan account credentials and portfolio data...")
+                        loop = asyncio.get_event_loop()
+                        
+                        # First, verify Dhan credentials are loaded from env file
+                        from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
+                        token = get_dhan_token()
+                        client_id = get_dhan_client_id()
+                        
+                        if not token or not client_id:
+                            logger.error("❌ Dhan credentials not found in env file - cannot fetch live data")
+                            return
+                        
+                        logger.info(f"✅ Dhan credentials loaded: Token={bool(token)}, ClientID={bool(client_id)}")
+                        
+                        # Fetch live portfolio data immediately (real-time from Dhan API)
+                        try:
+                            dhan_portfolio = await asyncio.wait_for(
+                                loop.run_in_executor(None, get_live_portfolio),
+                                timeout=10.0
+                            )
+                            if dhan_portfolio:
+                                cash = dhan_portfolio.get("cash", 0)
+                                holdings_count = len(dhan_portfolio.get("holdings", {}))
+                                total_value = dhan_portfolio.get("totalValue", 0)
+                                logger.info(f"✅ Fetched Dhan portfolio: Cash=₹{cash:,.2f}, Holdings={holdings_count}, Total Value=₹{total_value:,.2f}")
+                            else:
+                                logger.warning("⚠️ Dhan API returned empty portfolio")
+                        except asyncio.TimeoutError:
+                            logger.error("❌ Dhan API fetch timed out after 10s")
+                        except Exception as fetch_err:
+                            logger.error(f"❌ Failed to fetch Dhan portfolio: {fetch_err}")
+                        
+                        # Also sync with database via live_executor
+                        if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
+                            try:
+                                await loop.run_in_executor(None, trading_bot.live_executor.sync_portfolio_with_dhan)
+                                logger.info("✅ Synced portfolio with database")
+                            except Exception as sync_err:
+                                logger.warning(f"⚠️ Database sync failed: {sync_err}")
+                        
+                        # Sync portfolio manager if available
+                        if hasattr(trading_bot, 'portfolio_manager') and trading_bot.portfolio_manager:
+                            if hasattr(trading_bot.portfolio_manager, 'sync_with_dhan'):
+                                try:
+                                    await loop.run_in_executor(None, trading_bot.portfolio_manager.sync_with_dhan)
+                                except Exception as pm_sync_err:
+                                    logger.warning(f"⚠️ Portfolio manager sync failed: {pm_sync_err}")
+                        
+                        logger.info("✅ Live mode initialization completed - Dhan data fetched")
+                    except Exception as sync_error:
+                        logger.error(f"❌ Error fetching Dhan data: {sync_error}")
+                        logger.exception("Full traceback:")
+                
+                # Trigger immediate Dhan data fetch in background (non-blocking)
+                try:
+                    asyncio.create_task(fetch_dhan_data_immediately())
+                except Exception as task_err:
+                    logger.warning(f"Failed to start background Dhan fetch: {task_err}")
 
             logger.info(f"Settings updated: Mode={trading_bot.config.get('mode')}, "
                         f"Risk Level={trading_bot.config.get('riskLevel')}, "
@@ -3635,8 +4296,88 @@ async def update_settings(request: SettingsRequest):
                         f"Max Allocation={trading_bot.config.get('max_capital_per_trade', 0.25)*100:.1f}%")
 
             return MessageResponse(message="Settings updated successfully")
-        else:
-            raise HTTPException(status_code=500, detail="Bot not initialized")
+        # Bot not initialized: persist to file so they apply when bot starts
+        mode = request.mode or get_current_saved_mode() or os.getenv("MODE", "paper")
+        config_to_save = {
+            "mode": mode,
+            "riskLevel": request.riskLevel or "MEDIUM",
+            "stop_loss_pct": request.stop_loss_pct if request.stop_loss_pct is not None else 0.05,
+            "target_profit_pct": request.target_profit_pct if request.target_profit_pct is not None else 0.1,
+            "use_risk_reward": request.use_risk_reward if request.use_risk_reward is not None else True,
+            "risk_reward_ratio": request.risk_reward_ratio if request.risk_reward_ratio is not None else 2.0,
+            "max_capital_per_trade": request.max_capital_per_trade if request.max_capital_per_trade is not None else 0.25,
+            "max_trade_limit": request.max_trade_limit if request.max_trade_limit is not None else 10,
+        }
+        save_config_to_file(mode, config_to_save)
+        set_current_saved_mode(mode)
+        logger.info(f"Settings saved for mode: {mode} (bot not initialized yet)")
+        
+        # CRITICAL: If bot exists but is still initializing, update its config immediately
+        # This ensures get_bot_data() returns the correct mode even during initialization
+        if trading_bot and hasattr(trading_bot, 'config'):
+            try:
+                trading_bot.config['mode'] = mode
+                if request.riskLevel:
+                    trading_bot.config['riskLevel'] = request.riskLevel
+                if request.stop_loss_pct is not None:
+                    trading_bot.config['stop_loss_pct'] = request.stop_loss_pct
+                if request.max_capital_per_trade is not None:
+                    trading_bot.config['max_capital_per_trade'] = request.max_capital_per_trade
+                logger.info(f"Updated existing bot config with new mode: {mode}")
+            except Exception as update_err:
+                logger.warning(f"Failed to update bot config: {update_err}")
+        
+        # If switching to live mode, initialize bot and fetch Dhan data immediately
+        if mode == "live":
+            async def init_bot_and_fetch_dhan():
+                try:
+                    logger.info("🔄 Initializing bot for live mode and fetching Dhan credentials...")
+                    loop = asyncio.get_event_loop()
+                    
+                    # Initialize bot first
+                    try:
+                        await loop.run_in_executor(None, initialize_bot)
+                        logger.info("✅ Bot initialized successfully for live mode")
+                    except Exception as init_error:
+                        logger.warning(f"⚠️ Bot initialization failed: {init_error}")
+                        # Continue to try fetching Dhan data anyway
+                    
+                    # Fetch Dhan credentials and portfolio data immediately
+                    try:
+                        from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
+                        token = get_dhan_token()
+                        client_id = get_dhan_client_id()
+                        
+                        if not token or not client_id:
+                            logger.error("❌ Dhan credentials not found in env file")
+                            return
+                        
+                        logger.info(f"✅ Dhan credentials loaded: Token={bool(token)}, ClientID={bool(client_id)}")
+                        
+                        # Fetch live portfolio data
+                        dhan_portfolio = await asyncio.wait_for(
+                            loop.run_in_executor(None, get_live_portfolio),
+                            timeout=10.0
+                        )
+                        if dhan_portfolio:
+                            cash = dhan_portfolio.get("cash", 0)
+                            holdings_count = len(dhan_portfolio.get("holdings", {}))
+                            total_value = dhan_portfolio.get("totalValue", 0)
+                            logger.info(f"✅ Fetched Dhan portfolio: Cash=₹{cash:,.2f}, Holdings={holdings_count}, Total Value=₹{total_value:,.2f}")
+                    except asyncio.TimeoutError:
+                        logger.error("❌ Dhan API fetch timed out")
+                    except Exception as dhan_err:
+                        logger.error(f"❌ Failed to fetch Dhan data: {dhan_err}")
+                except Exception as error:
+                    logger.error(f"❌ Error in live mode initialization: {error}")
+            
+            # Start initialization and Dhan fetch in background without blocking
+            try:
+                asyncio.create_task(init_bot_and_fetch_dhan())
+            except Exception as task_error:
+                logger.warning(f"Failed to start background initialization: {task_error}")
+        
+        return MessageResponse(message=f"Settings saved successfully. Mode: {mode}")
 
     except HTTPException:
         raise
@@ -3693,20 +4434,80 @@ async def get_live_trading_status():
                 except Exception as e:
                     logger.error(f"Error getting live trading status: {e}")
 
+            # Check if Dhan credentials are configured
+            dhan_configured = False
+            dhan_error = None
+            try:
+                # Import dhan_client functions - use relative import since we're in the same directory
+                try:
+                    from dhan_client import get_dhan_token, get_dhan_client_id
+                except ImportError:
+                    # Fallback to absolute import
+                    import sys
+                    import os
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    if current_dir not in sys.path:
+                        sys.path.insert(0, current_dir)
+                    from dhan_client import get_dhan_token, get_dhan_client_id
+                
+                token = get_dhan_token() if get_dhan_token else None
+                client_id = get_dhan_client_id() if get_dhan_client_id else None
+                dhan_configured = bool(token and client_id)
+                if not dhan_configured:
+                    dhan_error = "DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID not set in environment"
+            except Exception as cred_error:
+                logger.error(f"Error checking Dhan credentials: {cred_error}")
+                dhan_error = str(cred_error)
+            
+            # Get actual mode from bot config or saved mode
+            actual_mode = trading_bot.config.get("mode", "live") if trading_bot else get_current_saved_mode() or "live"
+            
             return {
                 "available": True,
-                "mode": "live",
-                "dhan_connected": dhan_connected,
+                "mode": actual_mode,  # Use actual mode from config
+                "connected": dhan_connected,
+                "dhan_configured": dhan_configured,
+                "dhan_error": dhan_error,
                 "market_status": market_status,
                 "account_info": account_info,
                 "portfolio_synced": trading_bot.live_executor is not None
             }
         else:
+            # Check Dhan credentials even in paper mode
+            dhan_configured = False
+            dhan_error = None
+            try:
+                # Import dhan_client functions - use relative import since we're in the same directory
+                try:
+                    from dhan_client import get_dhan_token, get_dhan_client_id
+                except ImportError:
+                    # Fallback to absolute import
+                    import sys
+                    import os
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    if current_dir not in sys.path:
+                        sys.path.insert(0, current_dir)
+                    from dhan_client import get_dhan_token, get_dhan_client_id
+                
+                token = get_dhan_token() if get_dhan_token else None
+                client_id = get_dhan_client_id() if get_dhan_client_id else None
+                dhan_configured = bool(token and client_id)
+                if not dhan_configured:
+                    dhan_error = "DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID not set in environment"
+            except Exception as cred_error:
+                logger.error(f"Error checking Dhan credentials: {cred_error}")
+                dhan_error = str(cred_error)
+            
+            # Get saved mode even when bot not initialized
+            saved_mode = get_current_saved_mode() if not trading_bot else trading_bot.config.get("mode", "paper")
+            
             return {
                 "available": LIVE_TRADING_AVAILABLE,
-                "mode": trading_bot.config.get("mode") if trading_bot else "paper",
-                "dhan_connected": False,
-                "message": "Currently not in live mode"
+                "mode": saved_mode,  # Use saved mode instead of hardcoded "paper"
+                "connected": False,
+                "dhan_configured": dhan_configured,
+                "dhan_error": dhan_error,
+                "message": f"Currently in {saved_mode} mode"
             }
 
     except Exception as e:
@@ -3767,6 +4568,136 @@ async def sync_live_portfolio():
     except Exception as e:
         logger.error(f"Live sync error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class OrderRequest(BaseModel):
+    """Request model for placing buy/sell orders"""
+    symbol: str
+    side: str  # BUY or SELL
+    quantity: int
+    order_type: Optional[str] = "MARKET"
+    price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+
+
+@app.post("/api/order")
+async def place_order(request: OrderRequest):
+    """
+    Place a buy or sell order through the trading bot.
+    In live mode, uses live_executor to place orders via Dhan API.
+    In paper mode, simulates the order.
+    """
+    try:
+        if not trading_bot:
+            raise HTTPException(status_code=503, detail="Trading bot not initialized")
+
+        current_mode = trading_bot.config.get("mode", "paper")
+        side = request.side.upper()
+
+        if side not in ["BUY", "SELL"]:
+            raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
+
+        if request.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
+
+        # Prepare signal data for live executor
+        signal_data = {
+            "quantity": request.quantity,
+            "current_price": request.price,
+            "stop_loss": request.stop_loss,
+            "take_profit": request.take_profit,
+            "confidence": 1.0,  # Manual order - full confidence
+            "order_type": request.order_type or "MARKET"
+        }
+
+        # Execute order based on mode
+        if current_mode == "live":
+            if not LIVE_TRADING_AVAILABLE:
+                raise HTTPException(status_code=503, detail="Live trading not available")
+
+            if not hasattr(trading_bot, "live_executor") or not trading_bot.live_executor:
+                raise HTTPException(
+                    status_code=503, detail="Live executor not initialized. Please ensure Dhan credentials are configured.")
+
+            # Execute through live executor
+            if side == "BUY":
+                result = trading_bot.live_executor.execute_buy_order(request.symbol, signal_data)
+            else:  # SELL
+                result = trading_bot.live_executor.execute_sell_order(request.symbol, signal_data)
+
+            if not result.get("success", False):
+                error_msg = result.get("message", "Order execution failed")
+                logger.error(f"Order execution failed: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+
+            # Sync portfolio after order execution
+            try:
+                # Run sync in background to avoid blocking response
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(None, trading_bot.live_executor.sync_portfolio_with_dhan)
+            except Exception as sync_err:
+                logger.warning(f"Background sync failed: {sync_err}")
+
+            return {
+                "success": True,
+                "status": "executed",
+                "order_id": result.get("order_id"),
+                "symbol": request.symbol,
+                "side": side,
+                "quantity": result.get("quantity", request.quantity),
+                "price": result.get("price"),
+                "message": result.get("message", f"{side} order executed successfully"),
+                "mode": "live"
+            }
+
+        else:  # Paper mode
+            # Simulate order execution in paper mode
+            logger.info(f"Paper mode: Simulating {side} order for {request.quantity} {request.symbol}")
+
+            # Use portfolio manager to simulate trade
+            try:
+                if side == "BUY":
+                    trading_bot.portfolio_manager.record_trade(
+                        ticker=request.symbol,
+                        action="buy",
+                        quantity=request.quantity,
+                        price=request.price or 100.0,  # Default price if not provided
+                        stop_loss=request.stop_loss,
+                        take_profit=request.take_profit
+                    )
+                else:  # SELL
+                    trading_bot.portfolio_manager.record_trade(
+                        ticker=request.symbol,
+                        action="sell",
+                        quantity=request.quantity,
+                        price=request.price or 100.0,
+                        stop_loss=request.stop_loss,
+                        take_profit=request.take_profit
+                    )
+
+                return {
+                    "success": True,
+                    "status": "executed",
+                    "order_id": f"paper-{int(time.time())}",
+                    "symbol": request.symbol,
+                    "side": side,
+                    "quantity": request.quantity,
+                    "price": request.price or 100.0,
+                    "message": f"{side} order simulated successfully (paper mode)",
+                    "mode": "paper"
+                }
+            except Exception as paper_err:
+                logger.error(f"Paper mode order simulation failed: {paper_err}")
+                raise HTTPException(status_code=500, detail=f"Paper mode simulation failed: {str(paper_err)}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Order placement error: {e}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=f"Order placement failed: {str(e)}")
+
 
 # ============================================================================
 # MCP (Model Context Protocol) API Endpoints
@@ -4688,6 +5619,13 @@ def _do_blocking_bot_init():
     """Sync helper: data service check + update watchlist + initialize_bot. Run in thread only."""
     global trading_bot
     try:
+        # Load env file first to ensure credentials are available
+        try:
+            from dhan_client import _load_env
+            _load_env()
+        except:
+            pass
+        
         data_client = get_data_client()
         if data_client.is_service_available():
             logger.info("*** DATA SERVICE AVAILABLE - PRODUCTION MODE ***")
@@ -4705,6 +5643,7 @@ def _do_blocking_bot_init():
     except Exception as e:
         logger.error(f"Blocking bot init failed: {e}")
         logger.exception("Full traceback:")
+        # Don't fail - server should still start even if bot init fails
         trading_bot = None
 
 
@@ -4712,6 +5651,10 @@ def _do_blocking_bot_init():
 async def startup_event():
     """Initialize the trading bot on startup - NON-BLOCKING: all heavy work runs in thread."""
     global trading_bot
+    
+    # CRITICAL: Don't block startup - server must start immediately
+    # Bot initialization happens in background
+    logger.info("Server startup event triggered - bot initialization will run in background")
     
     async def init_bot_background():
         """Run blocking init in executor so event loop stays free and server can accept connections."""
@@ -4736,19 +5679,36 @@ async def startup_event():
                 trading_bot._pending_async_inits = []
 
             logger.info("Trading bot initialized on startup")
+        except Exception as init_error:
+            logger.error(f"Bot initialization failed: {init_error}")
+            logger.exception("Full traceback:")
+            # Don't fail server startup - continue without bot
+            trading_bot = None
 
             # Start Dhan sync service if in live mode
             if LIVE_TRADING_AVAILABLE and trading_bot and trading_bot.config.get("mode") == "live":
                 try:
-                    # Check Dhan credentials before starting sync service
-                    dhan_client_id = os.getenv("DHAN_CLIENT_ID")
-                    dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
+                    # Check Dhan credentials before starting sync service - load from env file
+                    try:
+                        from dhan_client import get_dhan_token, get_dhan_client_id
+                        dhan_access_token = get_dhan_token()
+                        dhan_client_id = get_dhan_client_id()
+                    except ImportError:
+                        # Fallback to direct env access
+                        from dotenv import load_dotenv
+                        import os
+                        current_dir = os.path.dirname(os.path.abspath(__file__))
+                        env_file = os.path.join(os.path.dirname(current_dir), "env")
+                        if os.path.exists(env_file):
+                            load_dotenv(env_file)
+                        dhan_client_id = os.getenv("DHAN_CLIENT_ID")
+                        dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
 
                     if not dhan_client_id or not dhan_access_token:
                         logger.error(
                             "DHAN_CLIENT_ID or DHAN_ACCESS_TOKEN not found in environment variables")
                         logger.error(
-                            "Please set these in your .env file to enable live trading")
+                            "Please set these in backend/hft2/env file to enable live trading")
                     else:
                         sync_service = start_sync_service(
                             sync_interval=30)  # Sync every 30 seconds

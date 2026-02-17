@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
-import { Star, Plus, X, TrendingUp, TrendingDown } from 'lucide-react';
+import { Star, Plus, X, TrendingUp, TrendingDown, Play } from 'lucide-react';
 import { stockAPI, POPULAR_STOCKS } from '../services/api';
 import { formatUSDToINR } from '../utils/currencyConverter';
 import SymbolAutocomplete from '../components/SymbolAutocomplete';
+import { hftApiService } from '../services/hftApiService';
+import toast from 'react-hot-toast';
 
 const WatchListPage = () => {
   const [watchlist, setWatchlist] = useState<string[]>(() => {
@@ -13,6 +15,7 @@ const WatchListPage = () => {
   const [predictions, setPredictions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [newSymbol, setNewSymbol] = useState('');
+  const [startingBot, setStartingBot] = useState<string | null>(null);
 
   const handleAddToWatchlist = (symbol: string) => {
     const normalized = symbol.trim().toUpperCase();
@@ -55,6 +58,35 @@ const WatchListPage = () => {
 
   const removeFromWatchlist = (symbol: string) => {
     setWatchlist(watchlist.filter((s) => s !== symbol));
+  };
+
+  const handleStartBot = async (symbol: string) => {
+    try {
+      setStartingBot(symbol);
+      toast.loading(`Starting bot for ${symbol}...`, { id: `start-bot-${symbol}` });
+      
+      const result = await hftApiService.startBotWithSymbol(symbol);
+      
+      if (result.status === 'pending') {
+        toast.success(`Bot initialization started for ${symbol}. Please wait...`, { id: `start-bot-${symbol}`, duration: 3000 });
+        // Navigate to BOT page to see progress
+        setTimeout(() => {
+          window.location.href = '/hft';
+        }, 2000);
+      } else {
+        toast.success(`Bot started successfully for ${symbol}!`, { id: `start-bot-${symbol}` });
+        // Navigate to BOT page after a short delay
+        setTimeout(() => {
+          window.location.href = '/hft';
+        }, 1500);
+      }
+    } catch (error: any) {
+      console.error('Error starting bot:', error);
+      const errorMsg = error?.response?.data?.detail || error?.message || `Failed to start bot for ${symbol}`;
+      toast.error(errorMsg, { id: `start-bot-${symbol}`, duration: 5000 });
+    } finally {
+      setStartingBot(null);
+    }
   };
 
   return (
@@ -123,12 +155,23 @@ const WatchListPage = () => {
                       <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
                       <h3 className="text-xl font-bold text-white">{symbol}</h3>
                     </div>
-                    <button
-                      onClick={() => removeFromWatchlist(symbol)}
-                      className="p-1 hover:bg-slate-700 rounded transition-colors"
-                    >
-                      <X className="w-4 h-4 text-gray-400" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleStartBot(symbol)}
+                        disabled={startingBot === symbol}
+                        className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded transition-colors flex items-center gap-1.5"
+                        title="Start bot with this symbol"
+                      >
+                        <Play className="w-3 h-3" />
+                        {startingBot === symbol ? 'Starting...' : 'Start Bot'}
+                      </button>
+                      <button
+                        onClick={() => removeFromWatchlist(symbol)}
+                        className="p-1 hover:bg-slate-700 rounded transition-colors"
+                      >
+                        <X className="w-4 h-4 text-gray-400" />
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">

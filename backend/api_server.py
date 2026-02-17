@@ -114,7 +114,7 @@ except Exception as e:
 price_validator = LivePriceValidator()
 
 # HFT: use cloned hft2 backend for real demat when HFT2_BACKEND_URL is set; else use in-repo stubs
-HFT2_BACKEND_URL = os.environ.get("HFT2_BACKEND_URL", "").rstrip("/")  # e.g. http://127.0.0.1:5001
+HFT2_BACKEND_URL = os.environ.get("HFT2_BACKEND_URL", "http://127.0.0.1:5000").rstrip("/")  # e.g. http://127.0.0.1:5002
 app.state.mcp_adapter = mcp_adapter
 
 if HFT2_BACKEND_URL:

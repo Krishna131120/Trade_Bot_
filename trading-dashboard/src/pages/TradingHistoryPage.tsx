@@ -58,7 +58,7 @@ const TradingHistoryPage = () => {
               <AlertCircle className="w-5 h-5" />
               <span>{error}</span>
             </div>
-            <button 
+            <button
               onClick={loadTradingHistory}
               className="mt-3 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm"
             >
@@ -68,9 +68,9 @@ const TradingHistoryPage = () => {
         ) : transactions.length > 0 ? (
           <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
             <div className="p-6 border-b border-slate-700">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 sm:gap-0">
                 <h2 className="text-xl font-semibold text-white">Transactions</h2>
-                <div className="flex space-x-2">
+                <div className="flex space-x-2 self-start sm:self-auto">
                   <button className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white text-sm rounded-lg transition-colors">
                     Filter
                   </button>
@@ -125,34 +125,32 @@ const TradingHistoryPage = () => {
                 </tbody>
               </table>
             </div>
-            
+
             {/* Pagination */}
             {totalPages > 1 && (
               <div className="flex items-center justify-between border-t border-slate-700 px-6 py-4">
                 <button
                   onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                   disabled={currentPage === 1}
-                  className={`px-4 py-2 rounded-lg ${
-                    currentPage === 1
+                  className={`px-4 py-2 rounded-lg ${currentPage === 1
                       ? 'bg-slate-700 text-gray-500 cursor-not-allowed'
                       : 'bg-slate-700 hover:bg-slate-600 text-white'
-                  }`}
+                    }`}
                 >
                   Previous
                 </button>
-                
+
                 <span className="text-white">
                   Page {currentPage} of {totalPages}
                 </span>
-                
+
                 <button
                   onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                   disabled={currentPage === totalPages}
-                  className={`px-4 py-2 rounded-lg ${
-                    currentPage === totalPages
+                  className={`px-4 py-2 rounded-lg ${currentPage === totalPages
                       ? 'bg-slate-700 text-gray-500 cursor-not-allowed'
                       : 'bg-slate-700 hover:bg-slate-600 text-white'
-                  }`}
+                    }`}
                 >
                   Next
                 </button>

@@ -377,14 +377,14 @@ const PortfolioPage = () => {
               <table className="w-full text-xs sm:text-sm">
                 <thead className="bg-slate-700 sticky top-0">
                   <tr>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase">Symbol</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase">Shares</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase hidden sm:table-cell">Avg Price</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase hidden md:table-cell">Curr Price</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase hidden lg:table-cell">Stop-Loss</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase">Market Value</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase hidden sm:table-cell">Unrealized</th>
-                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase text-center">Actions</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Symbol</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Shares</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Avg Price</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Curr Price</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Stop-Loss</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Market Value</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase whitespace-nowrap">Unrealized</th>
+                    <th className="px-2 sm:px-3 py-2 text-left font-medium text-gray-300 uppercase text-center whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700">
@@ -396,9 +396,9 @@ const PortfolioPage = () => {
                           <span className="text-white font-semibold text-xs sm:text-sm">{holding.symbol}</span>
                         </td>
                         <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-gray-300">{holding.shares}</td>
-                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-gray-300 hidden sm:table-cell">{formatUSDToINR(holding.avgPrice || 0, holding.symbol)}</td>
-                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-white hidden md:table-cell">{formatUSDToINR(holding.currentPrice || 0, holding.symbol)}</td>
-                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-white hidden lg:table-cell">
+                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-gray-300">{formatUSDToINR(holding.avgPrice || 0, holding.symbol)}</td>
+                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-white">{formatUSDToINR(holding.currentPrice || 0, holding.symbol)}</td>
+                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-white">
                           {holding.stopLossPrice ? (
                             <div className="flex flex-col">
                               <span>{formatUSDToINR(holding.stopLossPrice, holding.symbol)}</span>
@@ -409,7 +409,7 @@ const PortfolioPage = () => {
                           )}
                         </td>
                         <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap text-white text-xs sm:text-sm">{formatUSDToINR(holding.shares * holding.currentPrice, holding.symbol)}</td>
-                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap hidden sm:table-cell">
+                        <td className="px-2 sm:px-3 py-2 sm:py-3 whitespace-nowrap">
                           <div className="flex items-center space-x-1 sm:space-x-2 text-xs sm:text-sm">
                             {metrics.unrealizedValue >= 0 ? (
                               <TrendingUp className="w-3 h-3 sm:w-4 sm:h-4 text-blue-400 flex-shrink-0" />

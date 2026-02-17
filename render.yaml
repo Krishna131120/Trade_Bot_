@@ -1,11 +1,39 @@
-# Deploy the hft2 web backend (login, MongoDB, JWT). Uses minimal requirements so Render build succeeds.
 services:
+  # 1. HFT Backend (Core Logic, Auth, MongoDB)
   - type: web
-    name: trade-bot-backend
+    name: trade-bot-hft
     runtime: python
     buildCommand: pip install -r backend/hft2/backend/requirements-minimal.txt
     startCommand: bash backend/hft2/backend/render_start.sh
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0
-      # Set in Render dashboard: MONGODB_URI, JWT_SECRET
+      # Add MONGODB_URI and JWT_SECRET in Render Dashboard
+
+  # 2. API Backend (ML Predictions + Gateway to HFT)
+  - type: web
+    name: trade-bot-api
+    runtime: python
+    buildCommand: pip install -r backend/requirements-unified.txt
+    startCommand: python backend/api_server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.0
+      - key: HFT2_BACKEND_URL
+        fromService:
+          type: web
+          name: trade-bot-hft
+          property: url
+
+  # 3. Frontend (React Dashboard)
+  - type: static
+    name: trade-bot-dashboard
+    runtime: static
+    buildCommand: cd trading-dashboard && npm install && npm run build
+    publish: trading-dashboard/dist
+    envVars:
+      - key: VITE_API_BASE_BACKEND_URL
+        fromService:
+          type: web
+          name: trade-bot-api
+          property: url

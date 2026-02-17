@@ -76,16 +76,68 @@ export default function HftPage() {
     const loadDataFromBackend = async () => {
         try {
             const data = await hftApiService.getBotData();
+            // Ensure mode is properly set from backend response
+            const backendMode = data?.config?.mode || 'paper';
             setBotData(prev => ({
                 ...prev,
                 ...data,
+                config: {
+                    ...prev.config,
+                    ...data.config,
+                    mode: backendMode  // Use mode from backend
+                },
                 chatMessages: prev.chatMessages
             }));
             setConnected(true);
+            // Update live status based on mode
+            if (backendMode === 'live') {
+                await loadLiveStatus();
+            }
         } catch (error) {
             console.error('Error loading data from backend:', error);
-            toast.error('Failed to load bot data');
+            // Don't show error toast - just mark as disconnected but still show UI
             setConnected(false);
+            // Try to get saved mode from settings endpoint
+            try {
+                const settings = await hftApiService.getSettings();
+                const savedMode = settings?.mode || 'paper';
+                setBotData(prev => ({
+                    ...prev,
+                    isRunning: false,
+                    config: {
+                        ...prev.config,
+                        mode: savedMode,  // Use saved mode
+                        tickers: prev.config?.tickers || []
+                    },
+                    portfolio: {
+                        ...prev.portfolio,
+                        totalValue: prev.portfolio?.totalValue || 1000000,
+                        cash: prev.portfolio?.cash || 1000000,
+                        holdings: prev.portfolio?.holdings || {},
+                        tradeLog: prev.portfolio?.tradeLog || [],
+                        startingBalance: prev.portfolio?.startingBalance || 1000000
+                    }
+                }));
+            } catch (settingsError) {
+                // Fallback to default
+                setBotData(prev => ({
+                    ...prev,
+                    isRunning: false,
+                    config: {
+                        ...prev.config,
+                        mode: prev.config?.mode || 'paper',
+                        tickers: prev.config?.tickers || []
+                    },
+                    portfolio: {
+                        ...prev.portfolio,
+                        totalValue: prev.portfolio?.totalValue || 1000000,
+                        cash: prev.portfolio?.cash || 1000000,
+                        holdings: prev.portfolio?.holdings || {},
+                        tradeLog: prev.portfolio?.tradeLog || [],
+                        startingBalance: prev.portfolio?.startingBalance || 1000000
+                    }
+                }));
+            }
         }
     };
 
@@ -186,13 +238,20 @@ export default function HftPage() {
 
     const handleSaveSettings = async (settings: any) => {
         try {
+            setLoading(true);
             await hftApiService.updateSettings(settings);
             toast.success('Settings saved successfully!');
             setShowSettings(false);
+            // Refresh data multiple times to ensure live mode is reflected
             await refreshData();
+            await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms
+            await refreshData();
+            await loadLiveStatus(); // Explicitly reload live status
         } catch (error) {
             console.error('Error saving settings:', error);
             toast.error('Failed to save settings');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -329,6 +388,7 @@ export default function HftPage() {
                             ))}
                         </div>
                         <div className="p-4 md:p-6 min-h-[400px]">
+                            {/* Always show components regardless of trading mode or connection status */}
                             {activeTab === 'dashboard' && <HftDashboard botData={botData} />}
                             {activeTab === 'portfolio' && (
                                 <HftPortfolio
