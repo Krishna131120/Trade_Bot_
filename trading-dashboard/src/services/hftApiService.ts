@@ -79,7 +79,7 @@ export const hftApiService = {
     // ===== Complete Bot Data =====
     async getBotData(): Promise<HftBotData> {
         try {
-            const response = await api.get<HftBotData>('/bot-data', { timeout: 15000 }); // 15 seconds for bot data
+            const response = await api.get<HftBotData>('/bot-data', { timeout: 25000 }); // 25s for live Dhan fetch when bot not initialized
             return response.data;
         } catch (error) {
             console.error('Error getting bot data:', error);
@@ -112,8 +112,9 @@ export const hftApiService = {
     // ===== Watchlist Management =====
     async getWatchlist(): Promise<string[]> {
         try {
-            const response = await api.get<{ tickers: string[] }>('/watchlist');
-            return response.data.tickers || [];
+            const response = await api.get<string[]>('/watchlist');
+            // Backend returns array directly, not wrapped in {tickers: []}
+            return Array.isArray(response.data) ? response.data : [];
         } catch (error) {
             console.error('Error getting watchlist:', error);
             throw error;

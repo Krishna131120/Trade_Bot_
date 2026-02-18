@@ -78,13 +78,22 @@ export default function HftPage() {
             const data = await hftApiService.getBotData();
             // Ensure mode is properly set from backend response
             const backendMode = data?.config?.mode || 'paper';
+            // Also fetch watchlist directly to ensure we have the latest
+            let watchlistTickers: string[] = [];
+            try {
+                watchlistTickers = await hftApiService.getWatchlist();
+            } catch (watchlistErr) {
+                // Fallback to tickers from bot data if watchlist endpoint fails
+                watchlistTickers = data?.config?.tickers || [];
+            }
             setBotData(prev => ({
                 ...prev,
                 ...data,
                 config: {
                     ...prev.config,
                     ...data.config,
-                    mode: backendMode  // Use mode from backend
+                    mode: backendMode,  // Use mode from backend
+                    tickers: watchlistTickers  // Use watchlist from dedicated endpoint
                 },
                 chatMessages: prev.chatMessages
             }));
@@ -216,23 +225,59 @@ export default function HftPage() {
 
     const handleAddTicker = async (ticker: string) => {
         try {
-            await hftApiService.addToWatchlist(ticker);
-            toast.success(`Added ${ticker} to watchlist`);
-            await refreshData();
+            // Normalize ticker format
+            const normalizedTicker = ticker.toUpperCase().trim();
+            const tickerToAdd = normalizedTicker.endsWith('.NS') || normalizedTicker.endsWith('.BO')
+                ? normalizedTicker
+                : normalizedTicker + '.NS';
+            
+            // Call backend API
+            const response = await hftApiService.addToWatchlist(tickerToAdd);
+            
+            // Update UI immediately with response data
+            setBotData(prev => ({
+                ...prev,
+                config: {
+                    ...prev.config,
+                    tickers: response.tickers || []
+                }
+            }));
+            
+            toast.success(response.message || `Added ${tickerToAdd} to watchlist`);
         } catch (error) {
             console.error('Error adding ticker:', error);
             toast.error('Failed to add ticker');
+            // Refresh to get correct state on error
+            await refreshData();
         }
     };
 
     const handleRemoveTicker = async (ticker: string) => {
         try {
-            await hftApiService.removeFromWatchlist(ticker);
-            toast.success(`Removed ${ticker} from watchlist`);
-            await refreshData();
+            // Normalize ticker format
+            const normalizedTicker = ticker.toUpperCase().trim();
+            const tickerToRemove = normalizedTicker.endsWith('.NS') || normalizedTicker.endsWith('.BO') 
+                ? normalizedTicker 
+                : normalizedTicker + '.NS';
+            
+            // Call backend API
+            const response = await hftApiService.removeFromWatchlist(tickerToRemove);
+            
+            // Update UI immediately with response data
+            setBotData(prev => ({
+                ...prev,
+                config: {
+                    ...prev.config,
+                    tickers: response.tickers || []
+                }
+            }));
+            
+            toast.success(response.message || `Removed ${tickerToRemove} from watchlist`);
         } catch (error) {
             console.error('Error removing ticker:', error);
             toast.error('Failed to remove ticker');
+            // Refresh to get correct state on error
+            await refreshData();
         }
     };
 

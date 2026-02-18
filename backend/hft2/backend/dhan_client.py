@@ -102,7 +102,7 @@ def _get_fyers_ltp(symbol: str) -> Optional[float]:
     url = f"{base}/data/{quote(symbol, safe='')}"
     try:
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=2) as r:
             data = json.loads(r.read().decode())
             if isinstance(data, dict) and "price" in data:
                 p = float(data["price"])
