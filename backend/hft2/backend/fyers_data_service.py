@@ -22,9 +22,16 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from dotenv import load_dotenv
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from backend/hft2/env
+BACKEND_DIR = Path(__file__).resolve().parent
+ENV_FILE = BACKEND_DIR.parent / "env"
+if ENV_FILE.exists():
+    load_dotenv(ENV_FILE)
+else:
+    # Fallback to default .env loading
+    load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +43,12 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Log env file loaded status
+if ENV_FILE.exists():
+    logger.info(f"Loaded env from {ENV_FILE}")
+else:
+    logger.info("Using default .env loading")
 
 # Try to import Fyers API
 try:

@@ -235,7 +235,22 @@ def load_and_validate_config(mode: str = "paper") -> Dict[str, Any]:
         # Get default config
         default_config = ConfigValidator.get_default_config()
 
-        # Merge and validate
+        # IMPORTANT: Inject Dhan credentials from env BEFORE validation
+        # This ensures validation passes for live mode
+        dhan_client_id = os.getenv("DHAN_CLIENT_ID")
+        dhan_access_token = os.getenv("DHAN_ACCESS_TOKEN")
+        if dhan_client_id:
+            default_config["dhan_client_id"] = dhan_client_id
+        if dhan_access_token:
+            default_config["dhan_access_token"] = dhan_access_token
+        if raw_config:
+            # Also inject into raw_config if present
+            if dhan_client_id:
+                raw_config["dhan_client_id"] = dhan_client_id
+            if dhan_access_token:
+                raw_config["dhan_access_token"] = dhan_access_token
+
+        # Merge and validate (now credentials are present)
         if raw_config:
             validated_config = ConfigValidator.validate_and_merge_configs(default_config, raw_config)
         else:
@@ -266,10 +281,10 @@ def load_config_from_file(mode: str) -> Dict[str, Any]:
         import os
         import json
 
-        # Get the data directory path
+        # Get the data directory path (backend/hft2/data, same as web_backend._get_settings_data_dir)
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        data_dir = os.path.join(project_root, "data")
+        project_root = os.path.dirname(current_dir)  # backend/hft2/backend
+        data_dir = os.path.join(os.path.dirname(project_root), "data")  # backend/hft2/data
 
         # Determine the config file path
         config_file = os.path.join(data_dir, f"{mode}_config.json")

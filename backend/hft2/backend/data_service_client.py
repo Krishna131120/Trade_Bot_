@@ -311,7 +311,12 @@ class DataServiceClient:
                 return False
                 
         except Exception as e:
-            logger.error(f"Error updating watchlist: {e}")
+            err_str = str(e).lower()
+            # Connection refused / not running is expected when data service isn't started (e.g. run_bot_init_only.py)
+            if "connection" in err_str or "refused" in err_str or "10061" in err_str:
+                logger.warning(f"Data service (port 8002) not reachable - watchlist not synced: {e}")
+            else:
+                logger.error(f"Error updating watchlist: {e}")
             return False
     
     def get_watchlist(self) -> List[str]:

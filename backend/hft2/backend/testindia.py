@@ -9435,34 +9435,45 @@ def parse_arguments():
 
 def validate_environment_variables(mode: str) -> bool:
     """Validate required environment variables based on mode"""
+    # News API keys are optional - bot can run without news sentiment analysis
+    optional_vars = {
+        "news": ["NEWSAPI_KEY", "GNEWS_API_KEY"],  # Optional - only for news sentiment
+        "fyers": ["FYERS_APP_ID", "FYERS_ACCESS_TOKEN"]  # Optional - fallback to Yahoo Finance
+    }
+    
     required_vars = {
-        "common": ["NEWSAPI_KEY", "GNEWS_API_KEY"],
-        "live": ["DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN"],
-        "fyers": ["FYERS_APP_ID", "FYERS_ACCESS_TOKEN"]
+        "live": ["DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN"]  # Only required for live mode
     }
 
-    missing_vars = []
+    missing_required = []
+    missing_optional = []
 
-    # Check common variables
-    for var in required_vars["common"]:
-        if not os.getenv(var):
-            missing_vars.append(var)
-
-    # Check mode-specific variables
+    # Check mode-specific required variables
     if mode == "live":
         for var in required_vars["live"]:
             if not os.getenv(var):
-                missing_vars.append(var)
+                missing_required.append(var)
 
-    # Check optional Fyers variables
-    fyers_vars = required_vars["fyers"]
+    # Check optional news API variables (warn only)
+    for var in optional_vars["news"]:
+        if not os.getenv(var):
+            missing_optional.append(var)
+
+    # Check optional Fyers variables (warn only)
+    fyers_vars = optional_vars["fyers"]
     fyers_available = all(os.getenv(var) for var in fyers_vars)
 
-    if missing_vars:
-        logger.error(f"Missing required environment variables: {missing_vars}")
+    # Only fail if required variables are missing
+    if missing_required:
+        logger.error(f"Missing required environment variables: {missing_required}")
         logger.error(
             "Please check your .env file and ensure all required variables are set")
         return False
+
+    # Warn about optional variables but don't fail
+    if missing_optional:
+        logger.warning(f"Optional environment variables not set: {missing_optional}")
+        logger.warning("News sentiment analysis will be limited - bot will still run")
 
     if not fyers_available:
         logger.warning(

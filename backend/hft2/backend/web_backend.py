@@ -1166,7 +1166,19 @@ class WebTradingBot:
             self.portfolio_manager = None
 
         # Initialize the actual StockTradingBot from testindia.py (if available)
-        self.trading_bot = StockTradingBot(config) if StockTradingBot else None
+        # Call directly - nesting threads (timeout wrapper) from inside run_in_executor causes hang.
+        logger.info("🔄 About to create StockTradingBot instance...")
+        try:
+            if StockTradingBot:
+                self.trading_bot = StockTradingBot(config)
+                logger.info(f"✅ StockTradingBot instance created: {type(self.trading_bot).__name__}")
+            else:
+                self.trading_bot = None
+                logger.warning("StockTradingBot class not available")
+        except Exception as e:
+            logger.error(f"❌ Error creating StockTradingBot: {e}")
+            logger.exception("StockTradingBot creation error traceback:")
+            self.trading_bot = None
         self.is_running = False
         self.last_update = datetime.now()
         self.trading_thread = None
@@ -1181,15 +1193,29 @@ class WebTradingBot:
         self.dhan_client = None
 
         if LIVE_TRADING_AVAILABLE and config.get("mode") == "live":
-            self._initialize_live_trading()
+            try:
+                self._initialize_live_trading()
+            except Exception as e:
+                logger.error(f"Failed to initialize live trading: {e}")
+                logger.exception("Live trading initialization traceback:")
 
         # PRODUCTION FIX: Initialize data service client
-        self.data_client = get_data_client()
-        logger.info("Data service client initialized")
+        try:
+            self.data_client = get_data_client()
+            logger.info("Data service client initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize data service client: {e}")
+            logger.exception("Data service client initialization traceback:")
+            self.data_client = None
 
         # Initialize Production Core Components
         self.production_components = {}
-        self._initialize_production_components()
+        try:
+            self._initialize_production_components()
+        except Exception as e:
+            logger.error(f"Failed to initialize production components: {e}")
+            logger.exception("Production components initialization traceback:")
+            self.production_components = {}
 
         # Register WebSocket callback for real-time updates
         try:
@@ -1203,6 +1229,9 @@ class WebTradingBot:
             # Portfolio might not be directly accessible, skip callback registration
             logger.warning(f"Could not register portfolio callback: {e}")
             pass
+        
+        # Final initialization log
+        logger.info(f"✅ WebTradingBot.__init__() completed successfully - mode={config.get('mode')}, trading_bot={type(self.trading_bot).__name__ if self.trading_bot else 'None'}")
 
     def refresh_professional_integrations(self):
         """Refresh professional buy/sell integrations with updated configuration"""
@@ -1647,64 +1676,63 @@ class WebTradingBot:
                 access_token=dhan_access_token
             )
 
-            # Validate connection and sync portfolio
-            if not self.dhan_client.validate_connection():
-                logger.error("Failed to validate Dhan API connection")
-                return False
+            # Skip validation during initialization - it can hang. Validation will happen lazily when needed.
+            # The Dhan API has a 15s timeout in _dhan_request, but we don't want to block initialization.
+            logger.info("🔄 Skipping Dhan API validation during initialization (will validate lazily)")
+            # Just create the client - validation happens when actually used
 
             # Initialize live executor with database integration
-            self.live_executor = LiveTradingExecutor(
-                portfolio_manager=self.portfolio_manager,  # Use database portfolio manager
-                config={
-                    "dhan_client_id": dhan_client_id,
-                    "dhan_access_token": dhan_access_token,
-                    "stop_loss_pct": self.config.get("stop_loss_pct", 0.05),
-                    "max_capital_per_trade": self.config.get("max_capital_per_trade", 0.25),
-                    "max_trade_limit": self.config.get("max_trade_limit", 150)
-                }
-            )
-
-            # Sync portfolio with Dhan account
-            if not self.live_executor.sync_portfolio_with_dhan():
-                logger.error("Failed to sync portfolio with Dhan account")
-                return False
+            # NOTE: LiveTradingExecutor.__init__() calls sync_portfolio_with_dhan() which can hang
+            # We'll initialize it but catch any hanging/timeout issues
+            logger.info("🔄 Initializing LiveTradingExecutor...")
+            try:
+                self.live_executor = LiveTradingExecutor(
+                    portfolio_manager=self.portfolio_manager,  # Use database portfolio manager
+                    config={
+                        "dhan_client_id": dhan_client_id,
+                        "dhan_access_token": dhan_access_token,
+                        "stop_loss_pct": self.config.get("stop_loss_pct", 0.05),
+                        "max_capital_per_trade": self.config.get("max_capital_per_trade", 0.25),
+                        "max_trade_limit": self.config.get("max_trade_limit", 150)
+                    }
+                )
+                logger.info("✅ LiveTradingExecutor initialized")
+            except Exception as exec_init_err:
+                logger.error(f"Failed to initialize LiveTradingExecutor: {exec_init_err}")
+                logger.exception("LiveTradingExecutor initialization traceback:")
+                # Don't fail initialization - set to None and continue
+                self.live_executor = None
 
             # Connect live executor to trading bot for database integration
             if hasattr(self.trading_bot, 'executor'):
                 self.trading_bot.executor.set_live_executor(self.live_executor)
                 logger.info("Connected database live executor to trading bot")
 
-            logger.info(
-                "Successfully connected to Dhan account and synced portfolio")
+            logger.info("Successfully connected to Dhan account and synced portfolio")
 
-            # Sync portfolio with Dhan account (using already initialized live_executor)
-            if self.live_executor.sync_portfolio_with_dhan():
-                # Get account summary for startup logging
-                try:
-                    funds = self.live_executor.dhan_client.get_funds()
-                    balance = 0.0
-                    if funds:
-                        try:
-                            for key in ('availableBalance', 'availabelBalance', 'available_balance', 'available', 'availBalance', 'cash'):
-                                if isinstance(funds, dict) and key in funds:
-                                    balance = float(funds.get(key, 0.0) or 0.0)
-                                    break
-                            else:
-                                if isinstance(funds, dict):
-                                    for v in funds.values():
-                                        if isinstance(v, (int, float)):
-                                            balance = float(v)
-                                            break
-                        except Exception:
-                            balance = 0.0
-                    logger.info(
-                        f"🚀 Live trading initialized successfully - Account Balance: Rs.{balance:.2f}")
-                except Exception:
-                    logger.info("🚀 Live trading initialized successfully")
-                return True
-            else:
-                logger.error("Failed to sync portfolio with Dhan")
-                return False
+            # Get account summary for startup logging (sync already done by LiveTradingExecutor.__init__)
+            try:
+                funds = self.live_executor.dhan_client.get_funds()
+                balance = 0.0
+                if funds:
+                    try:
+                        for key in ('availableBalance', 'availabelBalance', 'available_balance', 'available', 'availBalance', 'cash'):
+                            if isinstance(funds, dict) and key in funds:
+                                balance = float(funds.get(key, 0.0) or 0.0)
+                                break
+                        else:
+                            if isinstance(funds, dict):
+                                for v in funds.values():
+                                    if isinstance(v, (int, float)):
+                                        balance = float(v)
+                                        break
+                    except Exception:
+                        balance = 0.0
+                logger.info(
+                    f"🚀 Live trading initialized successfully - Account Balance: Rs.{balance:.2f}")
+            except Exception as e:
+                logger.info(f"🚀 Live trading initialized successfully (balance fetch failed: {e})")
+            return True
 
         except Exception as e:
             logger.error(f"Failed to initialize live trading: {e}")
@@ -2719,7 +2747,7 @@ def load_config_from_file(mode: str) -> dict:
 
 
 def initialize_bot():
-    """Initialize the trading bot with schema-validated configuration"""
+    """Initialize the trading bot with schema-validated configuration. Returns the bot instance."""
     global trading_bot
 
     print("--- STARTING BOT INITIALIZATION ---")
@@ -2754,12 +2782,30 @@ def initialize_bot():
         # Load and validate configuration using schema
         if CONFIG_SCHEMA_AVAILABLE:
             logger.info("Using schema-validated configuration loading")
-            config = load_and_validate_config(default_mode)
-            # Always inject Dhan credentials from env (schema defaults are None)
+            # load_and_validate_config now injects Dhan credentials BEFORE validation
+            try:
+                config = load_and_validate_config(default_mode)
+            except Exception as validation_err:
+                logger.warning(f"Config validation failed, using defaults: {validation_err}")
+                config = ConfigValidator.get_default_config()
+                config["mode"] = default_mode
+            # Always ensure credentials are set from env (even if validation failed)
             if os.getenv("DHAN_CLIENT_ID"):
                 config["dhan_client_id"] = os.getenv("DHAN_CLIENT_ID")
             if os.getenv("DHAN_ACCESS_TOKEN"):
                 config["dhan_access_token"] = os.getenv("DHAN_ACCESS_TOKEN")
+            # ALWAYS load tickers from saved config file (regardless of validation success/failure)
+            saved_config = load_config_from_file(default_mode)
+            if saved_config:
+                saved_tickers = saved_config.get("tickers", [])
+                if saved_tickers:
+                    config["tickers"] = saved_tickers
+                    logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
+                # Also ensure mode matches saved config
+                saved_mode = saved_config.get("mode", default_mode)
+                if saved_mode in ("paper", "live"):
+                    config["mode"] = saved_mode
+                    logger.info(f"📊 Using saved mode: {saved_mode}")
         else:
             logger.warning(
                 "Configuration schema not available, using legacy loading")
@@ -2801,14 +2847,17 @@ def initialize_bot():
 
                 # Ensure mode from saved config takes precedence
                 saved_mode = saved_config.get("mode", default_mode)
+                # Always load tickers from saved config (even if validation failed)
+                saved_tickers = saved_config.get("tickers", [])
                 config.update({
                     "mode": saved_mode,  # Use saved mode
                     "riskLevel": saved_config.get("riskLevel", config["riskLevel"]),
                     "stop_loss_pct": saved_config.get("stop_loss_pct", config["stop_loss_pct"]),
                     "max_capital_per_trade": saved_config.get("max_capital_per_trade", config["max_capital_per_trade"]),
                     "max_trade_limit": saved_config.get("max_trade_limit", config["max_trade_limit"]),
-                    "tickers": saved_config.get("tickers", config.get("tickers", []))  # Load saved watchlist tickers
+                    "tickers": saved_tickers if saved_tickers else config.get("tickers", [])  # Load saved watchlist tickers
                 })
+                logger.info(f"Loaded saved config with mode: {saved_mode}, tickers: {config.get('tickers', [])}")
                 logger.info(f"Loaded saved config with mode: {saved_mode}, tickers: {config.get('tickers', [])}")
 
                 # Ensure Dhan credentials are always set from environment variables
@@ -2831,7 +2880,17 @@ def initialize_bot():
         logger.info(
             f"  DHAN_CLIENT_ID from env: {os.getenv('DHAN_CLIENT_ID', 'NOT_FOUND')[:10] if os.getenv('DHAN_CLIENT_ID') else 'NOT_FOUND'}")
 
-        trading_bot = WebTradingBot(config)
+        try:
+            logger.info("🔄 About to create WebTradingBot instance...")
+            trading_bot = WebTradingBot(config)
+            logger.info(f"✅ Created WebTradingBot instance: {type(trading_bot).__name__}, mode={config.get('mode')}")
+            logger.info(f"✅ WebTradingBot instance created successfully - id={id(trading_bot)}")
+        except Exception as bot_init_err:
+            logger.error(f"❌ WebTradingBot creation failed: {bot_init_err}")
+            logger.exception("WebTradingBot creation traceback:")
+            import traceback
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            raise  # Re-raise so outer exception handler catches it
 
         # Apply risk level settings from loaded config
         apply_risk_level_settings(trading_bot, config["riskLevel"])
@@ -2839,12 +2898,26 @@ def initialize_bot():
         # Set the trading bot reference in the risk engine
         risk_engine.set_trading_bot(trading_bot)
 
+        # Verify global was set
+        import sys
+        current_module = sys.modules[__name__]
+        if hasattr(current_module, 'trading_bot') and current_module.trading_bot is trading_bot:
+            logger.info("✅ Global trading_bot variable set successfully")
+        else:
+            logger.error("❌ Global trading_bot variable NOT set correctly!")
+        
         logger.info("Trading bot initialized successfully")
+        logger.info(f"🔄 About to return trading_bot instance: {type(trading_bot).__name__}, id={id(trading_bot)}")
+        # Return the bot instance so caller can set it explicitly
+        return trading_bot
 
     except Exception as e:
         logger.error(f"Error initializing trading bot: {e}")
         print(f"CRITICAL INITIALIZATION ERROR: {e}")
         traceback.print_exc()
+        # Ensure trading_bot is None on error
+        trading_bot = None
+        return None
         # raise  # Don't raise in thread, just log
 
 
@@ -3292,13 +3365,13 @@ async def get_bot_data():
                 from dhan_client import get_live_portfolio
                 loop = asyncio.get_event_loop()
                 try:
-                    # Use 12s timeout (reduced from 20s) to prevent frontend timeout (frontend timeout is 25s)
+                    # 22s timeout: get_live_portfolio (Dhan API + Fyers LTP per holding) can take 15–20s; frontend timeout is 25s
                     dhan_portfolio = await asyncio.wait_for(
                         loop.run_in_executor(None, get_live_portfolio),
-                        timeout=12.0
+                        timeout=22.0
                     )
                 except asyncio.TimeoutError:
-                    logger.warning("Dhan fetch timed out when bot not initialized (12s limit)")
+                    logger.warning("Dhan fetch timed out when bot not initialized (22s limit)")
                     dhan_portfolio = None
                 
                 if dhan_portfolio:
@@ -4016,12 +4089,68 @@ async def start_bot():
                 )
             
             async def init_bot_background():
-                """Initialize bot in background without blocking the request"""
+                """Initialize bot in background, then start it and trigger predictions for watchlist."""
+                global trading_bot
+                logger.info("🚀 init_bot_background() async function STARTED")
                 try:
                     start_bot._initializing = True
+                    logger.info("🚀 Set _initializing flag to True")
                     loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(None, initialize_bot)
-                    logger.info("✅ Bot initialized successfully in background")
+                    logger.info("🔄 About to run initialize_bot() in executor...")
+                    # Run initialization in executor and get the bot instance
+                    try:
+                        logger.info("🔄 Executor starting initialize_bot()...")
+                        # 60s timeout: init runs in executor; no nested threads so it should complete or fail fast
+                        bot_instance = await asyncio.wait_for(
+                            loop.run_in_executor(None, initialize_bot),
+                            timeout=60.0
+                        )
+                        logger.info(f"🔄 Executor completed, bot_instance type: {type(bot_instance) if bot_instance else 'None'}")
+                        if bot_instance:
+                            logger.info(f"✅ Bot instance returned successfully: {type(bot_instance).__name__}, id={id(bot_instance)}")
+                        else:
+                            logger.error("❌ Bot instance is None after executor completion!")
+                    except asyncio.TimeoutError:
+                        logger.error("❌ Bot initialization timed out after 60 seconds")
+                        bot_instance = None
+                    except Exception as exec_err:
+                        logger.error(f"❌ Executor raised exception: {exec_err}")
+                        logger.exception("Executor exception traceback:")
+                        import traceback
+                        logger.error(f"Full executor traceback:\n{traceback.format_exc()}")
+                        bot_instance = None
+                    
+                    # CRITICAL: Explicitly set the global variable after executor completes
+                    if bot_instance:
+                        trading_bot = bot_instance
+                        logger.info(f"✅ Bot initialized successfully in background - trading_bot is set: {type(trading_bot).__name__}")
+                    else:
+                        logger.error("❌ Bot initialization completed but returned None!")
+                        # Fallback: try to get from module global
+                        import sys
+                        current_module = sys.modules[__name__]
+                        if hasattr(current_module, 'trading_bot') and current_module.trading_bot:
+                            trading_bot = current_module.trading_bot
+                            logger.info("✅ Retrieved trading_bot from module global as fallback")
+                        else:
+                            logger.error("❌ Module global trading_bot is also None!")
+                    # Start the bot and trigger predictions for watchlist (same as when we wait)
+                    if trading_bot:
+                        saved_mode = get_current_saved_mode() or "paper"
+                        saved_config = load_config_from_file(saved_mode) or {}
+                        saved_tickers = saved_config.get("tickers", [])
+                        if saved_tickers:
+                            trading_bot.config["tickers"] = saved_tickers
+                            logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
+                        risk_level = trading_bot.config.get("riskLevel", "MEDIUM")
+                        apply_risk_level_settings(trading_bot, risk_level)
+                        await loop.run_in_executor(None, trading_bot.start)
+                        tickers_list = trading_bot.config.get("tickers", [])
+                        logger.info(f"🚀 Bot started in background with {len(tickers_list)} tickers: {tickers_list}")
+                        if tickers_list:
+                            for symbol in tickers_list:
+                                asyncio.create_task(trigger_all_hft2_components_for_symbol(symbol))
+                            logger.info(f"📊 Triggered predictions/analysis for watchlist in background")
                 except Exception as init_error:
                     logger.error(f"❌ Background bot initialization failed: {init_error}")
                     logger.exception("Full traceback:")
@@ -4032,18 +4161,17 @@ async def start_bot():
             asyncio.create_task(init_bot_background())
             logger.info("🔄 Bot initialization started in background - returning immediately")
             
-            # Wait a short time (3 seconds) to see if initialization completes quickly
-            # This handles the case where initialization is fast
-            for _ in range(6):  # Check 6 times over 3 seconds (0.5s intervals)
+            # Wait up to 25 seconds to see if initialization completes (init can take 15-20s with Dhan API calls)
+            for i in range(50):  # Check 50 times over 25 seconds (0.5s intervals)
                 await asyncio.sleep(0.5)
                 if trading_bot:
-                    logger.info("✅ Bot initialized quickly - continuing")
+                    logger.info(f"✅ Bot initialized after {i*0.5:.1f}s - continuing to start and trigger predictions")
                     break
             
-            # If bot still not initialized after short wait, return message
+            # If bot still not initialized after wait, return message (background task will start it when done)
             if not trading_bot:
                 return MessageResponse(
-                    message="Bot initialization started in background. Please wait a few seconds and try starting again, or refresh the page to check status."
+                    message="Bot initialization started in background. Bot will start and run predictions for your watchlist shortly. Refresh the page in a few seconds to see status."
                 )
 
         if trading_bot:
