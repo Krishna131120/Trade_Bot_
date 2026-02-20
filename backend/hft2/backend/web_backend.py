@@ -627,104 +627,121 @@ groq_engine = None
 
 # Real-time market data function
 
+# Semaphore: only 1 ML analysis runs at a time.
+# Each analyze_stock call takes 2-3 min; running multiple in parallel saturates the thread pool
+# and causes /api/bot-data and /api/trades to time out while waiting for a free thread.
+_analysis_semaphore = asyncio.Semaphore(1)
+
 async def trigger_all_hft2_components_for_symbol(symbol: str):
-    """Reusable async function to trigger all HFT2 backend components (predictions, analysis, data fetching) for a symbol."""
-    try:
-        logger.info(f"🚀 Starting HFT2 backend process for {symbol}...")
-        prediction_result = None
-        analysis_result = None
-        
-        # 1. Fetch live data from Fyers data service (if available)
+    """Reusable async function to trigger all HFT2 backend components (predictions, analysis, data fetching) for a symbol.
+    Runs with a semaphore so only one ticker's full ML pipeline executes at a time."""
+    # Acquire semaphore: only 1 analysis at a time to avoid saturating the thread pool
+    async with _analysis_semaphore:
         try:
-            from fyers_client import get_fyers_client
-            fyers = get_fyers_client()
-            if fyers:
-                try:
-                    # Get current price from Fyers
-                    current_price = fyers.get_price(symbol)
-                    if current_price:
-                        logger.info(f"✅ Fetched live price from Fyers for {symbol}: ₹{current_price}")
-                except Exception as fyers_err:
-                    logger.warning(f"⚠️ Fyers data fetch failed for {symbol}: {fyers_err}")
-        except Exception as fyers_init_err:
-            logger.debug(f"Fyers client not available: {fyers_init_err}")
-        
-        # 2. Fetch historical data from Yahoo Finance
-        try:
-            import yfinance as yf
-            stock = yf.Ticker(symbol.replace(".NS", "").replace(".BO", ""))
-            hist_data = stock.history(period="1mo")
-            if not hist_data.empty:
-                logger.info(f"✅ Fetched historical data from Yahoo Finance for {symbol}: {len(hist_data)} days")
-        except Exception as yahoo_err:
-            logger.warning(f"⚠️ Yahoo Finance historical data fetch failed: {yahoo_err}")
-        
-        # 3. Trigger MCP prediction if available
-        if MCP_AVAILABLE:
-            await _ensure_mcp_initialized()
-            if mcp_trading_agent:
-                try:
-                    logger.info(f"📊 Triggering MCP prediction for {symbol}...")
-                    from mcp_server.tools.prediction_tool import PredictionTool
-                    prediction_tool = PredictionTool({
-                        "tool_id": "prediction_tool",
-                        "ollama_enabled": True,
-                        "ollama_host": "http://localhost:11434",
-                        "ollama_model": "llama3.1:8b"
-                    })
-                    session_id = str(int(time.time() * 1000000))
-                    pred_result = await prediction_tool.rank_predictions({
-                        "symbols": [symbol],
-                        "models": ["rl"],
-                        "horizon": "day",
-                        "include_explanations": True
-                    }, session_id)
-                    if pred_result.status == "SUCCESS":
-                        prediction_result = pred_result.data
-                        logger.info(f"✅ Prediction completed for {symbol}: {prediction_result}")
-                    else:
-                        logger.warning(f"⚠️ Prediction returned status: {pred_result.status}")
-                except Exception as pred_error:
-                    logger.warning(f"⚠️ Prediction failed for {symbol}: {pred_error}")
-                    logger.exception("Prediction error traceback:")
-        
-        # 4. Trigger comprehensive analysis if available
-        if MCP_AVAILABLE and mcp_trading_agent:
+            logger.info(f"🚀 Starting HFT2 backend process for {symbol}...")
+            prediction_result = None
+            analysis_result = None
+            
+            # 1. Fetch live data from Fyers data service (if available)
             try:
-                logger.info(f"🔍 Triggering comprehensive analysis for {symbol}...")
-                signal = await mcp_trading_agent.analyze_and_decide(
-                    symbol=symbol,
-                    market_context={
-                        "timeframe": "intraday",
-                        "analysis_type": "comprehensive"
-                    }
+                from fyers_client import get_fyers_client
+                fyers = get_fyers_client()
+                if fyers:
+                    try:
+                        # Get current price from Fyers
+                        current_price = fyers.get_price(symbol)
+                        if current_price:
+                            logger.info(f"✅ Fetched live price from Fyers for {symbol}: ₹{current_price}")
+                    except Exception as fyers_err:
+                        logger.warning(f"⚠️ Fyers data fetch failed for {symbol}: {fyers_err}")
+            except Exception as fyers_init_err:
+                logger.debug(f"Fyers client not available: {fyers_init_err}")
+            
+            # 2. Fetch historical data from Yahoo Finance (run in executor - synchronous call)
+            try:
+                import yfinance as yf
+                loop = asyncio.get_event_loop()
+                def _fetch_yf_history(sym):
+                    stock = yf.Ticker(sym.replace(".NS", "").replace(".BO", ""))
+                    return stock.history(period="1mo")
+                hist_data = await asyncio.wait_for(
+                    loop.run_in_executor(None, _fetch_yf_history, symbol),
+                    timeout=15.0
                 )
-                analysis_result = {
-                    "symbol": signal.symbol,
-                    "recommendation": signal.decision.value,
-                    "confidence": signal.confidence,
-                    "reasoning": signal.reasoning,
-                    "risk_score": signal.risk_score,
-                    "position_size": signal.position_size,
-                    "target_price": signal.target_price,
-                    "stop_loss": signal.stop_loss
-                }
-                logger.info(f"✅ Analysis completed for {symbol}: {signal.decision.value} (confidence: {signal.confidence})")
-            except Exception as analysis_error:
-                logger.warning(f"⚠️ Analysis failed for {symbol}: {analysis_error}")
-                logger.exception("Analysis error traceback:")
-        
-        # 5. Update data feed with new symbol
-        try:
-            if trading_bot and hasattr(trading_bot, 'data_feed') and trading_bot.data_feed:
-                logger.info(f"✅ Data feed updated for {symbol}")
-        except Exception as feed_err:
-            logger.warning(f"⚠️ Data feed update failed: {feed_err}")
-        
-        logger.info(f"✅ HFT2 backend process completed for {symbol}")
-    except Exception as process_error:
-        logger.error(f"❌ Error in HFT2 backend process for {symbol}: {process_error}")
-        logger.exception("Full traceback:")
+                if not hist_data.empty:
+                    logger.info(f"✅ Fetched historical data from Yahoo Finance for {symbol}: {len(hist_data)} days")
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Yahoo Finance historical data fetch timed out for {symbol}")
+            except Exception as yahoo_err:
+                logger.warning(f"⚠️ Yahoo Finance historical data fetch failed: {yahoo_err}")
+            
+            # 3. Trigger MCP prediction if available
+            if MCP_AVAILABLE:
+                await _ensure_mcp_initialized()
+                if mcp_trading_agent:
+                    try:
+                        logger.info(f"📊 Triggering MCP prediction for {symbol}...")
+                        from mcp_server.tools.prediction_tool import PredictionTool
+                        prediction_tool = PredictionTool({
+                            "tool_id": "prediction_tool",
+                            "ollama_enabled": True,
+                            "ollama_host": "http://localhost:11434",
+                            "ollama_model": "llama3.1:8b"
+                        })
+                        session_id = str(int(time.time() * 1000000))
+                        pred_result = await prediction_tool.rank_predictions({
+                            "symbols": [symbol],
+                            "models": ["rl"],
+                            "horizon": "day",
+                            "include_explanations": True
+                        }, session_id)
+                        if pred_result.status == "SUCCESS":
+                            prediction_result = pred_result.data
+                            logger.info(f"✅ Prediction completed for {symbol}: {prediction_result}")
+                        else:
+                            logger.warning(f"⚠️ Prediction returned status: {pred_result.status}")
+                    except Exception as pred_error:
+                        logger.warning(f"⚠️ Prediction failed for {symbol}: {pred_error}")
+                        logger.exception("Prediction error traceback:")
+            
+            # 4. Trigger comprehensive analysis if available
+            if MCP_AVAILABLE and mcp_trading_agent:
+                try:
+                    logger.info(f"🔍 Triggering comprehensive analysis for {symbol}...")
+                    signal = await mcp_trading_agent.analyze_and_decide(
+                        symbol=symbol,
+                        market_context={
+                            "timeframe": "intraday",
+                            "analysis_type": "comprehensive"
+                        }
+                    )
+                    analysis_result = {
+                        "symbol": signal.symbol,
+                        "recommendation": signal.decision.value,
+                        "confidence": signal.confidence,
+                        "reasoning": signal.reasoning,
+                        "risk_score": signal.risk_score,
+                        "position_size": signal.position_size,
+                        "target_price": signal.target_price,
+                        "stop_loss": signal.stop_loss
+                    }
+                    logger.info(f"✅ Analysis completed for {symbol}: {signal.decision.value} (confidence: {signal.confidence})")
+                except Exception as analysis_error:
+                    logger.warning(f"⚠️ Analysis failed for {symbol}: {analysis_error}")
+                    logger.exception("Analysis error traceback:")
+            
+            # 5. Update data feed with new symbol
+            try:
+                if trading_bot and hasattr(trading_bot, 'data_feed') and trading_bot.data_feed:
+                    logger.info(f"✅ Data feed updated for {symbol}")
+            except Exception as feed_err:
+                logger.warning(f"⚠️ Data feed update failed: {feed_err}")
+            
+            logger.info(f"✅ HFT2 backend process completed for {symbol}")
+        except Exception as process_error:
+            logger.error(f"❌ Error in HFT2 backend process for {symbol}: {process_error}")
+            logger.exception("Full traceback:")
+
 
 
 async def get_real_time_market_response(message: str) -> Optional[str]:
@@ -4103,7 +4120,7 @@ async def start_bot():
                         # 60s timeout: init runs in executor; no nested threads so it should complete or fail fast
                         bot_instance = await asyncio.wait_for(
                             loop.run_in_executor(None, initialize_bot),
-                            timeout=60.0
+                            timeout=180.0
                         )
                         logger.info(f"🔄 Executor completed, bot_instance type: {type(bot_instance) if bot_instance else 'None'}")
                         if bot_instance:
@@ -4111,7 +4128,7 @@ async def start_bot():
                         else:
                             logger.error("❌ Bot instance is None after executor completion!")
                     except asyncio.TimeoutError:
-                        logger.error("❌ Bot initialization timed out after 60 seconds")
+                        logger.error("❌ Bot initialization timed out after 180 seconds")
                         bot_instance = None
                     except Exception as exec_err:
                         logger.error(f"❌ Executor raised exception: {exec_err}")
@@ -4157,22 +4174,17 @@ async def start_bot():
                 finally:
                     start_bot._initializing = False
             
-            # Start initialization in background (non-blocking)
+            # Start initialization in background (non-blocking) - return immediately
             asyncio.create_task(init_bot_background())
             logger.info("🔄 Bot initialization started in background - returning immediately")
-            
-            # Wait up to 25 seconds to see if initialization completes (init can take 15-20s with Dhan API calls)
-            for i in range(50):  # Check 50 times over 25 seconds (0.5s intervals)
-                await asyncio.sleep(0.5)
-                if trading_bot:
-                    logger.info(f"✅ Bot initialized after {i*0.5:.1f}s - continuing to start and trigger predictions")
-                    break
-            
-            # If bot still not initialized after wait, return message (background task will start it when done)
-            if not trading_bot:
-                return MessageResponse(
-                    message="Bot initialization started in background. Bot will start and run predictions for your watchlist shortly. Refresh the page in a few seconds to see status."
-                )
+
+            # Return right away — do NOT wait for init to complete.
+            # The background task will set trading_bot and trigger predictions when ready.
+            # Frontend should poll GET /api/status to check is_running.
+            return MessageResponse(
+                message="Bot initialization started in background. Predictions will run for your watchlist shortly. "
+                        "Poll GET /api/status for is_running=true to confirm the bot is active."
+            )
 
         if trading_bot:
             # Ensure watchlist tickers are loaded from saved config if bot was just initialized

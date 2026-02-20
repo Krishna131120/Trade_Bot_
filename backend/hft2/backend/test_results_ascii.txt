@@ -1,0 +1,1413 @@
+python : 2026-02-20
+12:05:32.654782: I ten
+sorflow/core/util/port
+.cc:153] oneDNN
+custom operations are
+on. You may see
+slightly different
+numerical results due
+to floating-point
+round-off errors from
+different computation
+orders. To turn them
+off, set the
+environment variable `
+TF_ENABLE_ONEDNN_OPTS=
+0`.
+At line:1 char:1
++ python
+test_pipeline.py >
+test_output.txt 2>&1;
+Get-Content test_outp
+...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~
+    + CategoryInfo
+          : NotSpeci
+  fied: (2026-02-20
+  12:0...ONEDNN_OP
+TS=0`.:String) []
+, RemoteException
+    + FullyQualifiedE
+   rrorId : NativeCo
+  mmandError
+
+2026-02-20
+12:05:35.250199: I ten
+sorflow/core/util/port
+.cc:153] oneDNN
+custom operations are
+on. You may see
+slightly different
+numerical results due
+to floating-point
+round-off errors from
+different computation
+orders. To turn them
+off, set the
+environment variable `
+TF_ENABLE_ONEDNN_OPTS=
+0`.
+02/20/2026 12:05:37
+PM - LangChain not
+available for LLM
+integration
+02/20/2026 12:05:37
+PM - Selenium not
+available for
+enhanced web scraping
+02/20/2026 12:05:37
+PM - StockTradingBot
+received config:
+02/20/2026 12:05:37
+PM -   Mode: paper
+02/20/2026 12:05:37
+PM -   Dhan Client
+ID: SET
+02/20/2026 12:05:37
+PM -   Dhan Access
+Token: SET
+02/20/2026 12:05:37
+PM - VirtualPortfolio
+received config:
+02/20/2026 12:05:37
+PM -   Mode: paper
+02/20/2026 12:05:37
+PM -   Dhan Client
+ID: SET
+02/20/2026 12:05:37
+PM -   Dhan Access
+Token: SET
+02/20/2026 12:05:37
+PM - Dhan credentials
+check - Client ID:
+SET, Token: SET
+02/20/2026 12:05:37
+PM - Initializing
+Dhan API with client
+ID: 1107...4503
+02/20/2026 12:05:37
+PM - Dhan API
+initialized
+successfully
+02/20/2026 12:05:37
+PM - Loaded
+portfolio:
+Cash=Rs.654.61,
+Holdings=2 positions
+02/20/2026 12:05:37
+PM - Loaded 16 trades
+from trade log
+02/20/2026 12:05:37
+PM - Fyers API not
+available - falling
+back to cached data
+02/20/2026 12:05:37
+PM - Loaded 79 stocks
+from cache
+02/20/2026 12:05:37
+PM - Dynamic ticker
+mapper initialized
+02/20/2026 12:05:37
+PM - Loaded dynamic
+config - Stop Loss:
+5.0%, Target Price:
+10.0%
+02/20/2026 12:05:37
+PM - Professional Buy
+Logic initialized
+with genuine
+parameters
+02/20/2026 12:05:37
+PM - Market Context
+Analyzer initialized
+02/20/2026 12:05:37
+PM - Initializing
+database with URI: sql
+ite:///C:/Users/pc44/D
+ownloads/trade-bot-mai
+n/backend/hft2/data/tr
+ading.db
+02/20/2026 12:05:37
+PM - Creating
+database tables
+02/20/2026 12:05:37
+PM - Database tables
+created successfully
+02/20/2026 12:05:37
+PM - Signal Tracker
+initialized
+02/20/2026 12:05:37
+PM - Professional Buy
+Integration
+initialized
+02/20/2026 12:05:37
+PM - Professional buy
+integration
+initialized
+successfully
+02/20/2026 12:05:37
+PM - Professional
+Sell Logic
+initialized with
+institutional
+parameters
+02/20/2026 12:05:37
+PM - Professional
+Sell Integration
+initialized
+02/20/2026 12:05:37
+PM - Professional
+sell integration
+initialized
+successfully
+02/20/2026 12:05:37
+PM - Integrated Risk
+Manager initialized
+with dynamic config
+from live_config.json
+02/20/2026 12:05:37
+PM - Production core
+components
+initialized
+successfully
+02/20/2026 12:05:38
+PM - Continuous
+learning engine
+initialized
+successfully
+02/20/2026 12:05:38
+PM - Loaded env from C
+:\Users\pc44\Downloads
+\trade-bot-main\backen
+d\hft2\env
+02/20/2026 12:05:38
+PM - Fyers API not
+available: No module
+named 'fyers_apiv3'
+02/20/2026 12:05:38
+PM - Fyers Data
+Service initialized
+02/20/2026 12:05:38
+PM - Fyers Data
+Service initialized
+02/20/2026 12:05:38
+PM - Fyers data
+service initialized
+(runs independently)
+02/20/2026 12:05:38
+PM - Llama LLM
+removed - using Groq
+integration only
+02/20/2026 12:05:38
+PM - Initializing
+Stock Trading Bot for
+Indian market...
+02/20/2026 12:05:38
+PM - Ensemble
+Optimizer initialized
+02/20/2026 12:05:38
+PM - Advanced Feature
+Engineering System
+initialized
+02/20/2026 12:05:38
+PM - Model Validator
+initialized
+02/20/2026 12:05:38
+PM - ML Interface
+initialized with all
+components
+02/20/2026 12:05:38
+PM - Unified ML
+interface initialized
+successfully
+02/20/2026 12:05:38
+PM - Adaptive ML
+model selector
+initialized
+successfully
+02/20/2026 12:05:38
+PM - Fetching and
+analyzing data for
+TCS.NS...
+02/20/2026 12:05:39
+PM - Using Yahoo
+Finance data for
+TCS.NS (1y)
+02/20/2026 12:05:41
+PM - HTTP Error 404: {
+"quoteSummary":{"resul
+t":null,"error":{"code
+":"Not Found","descrip
+tion":"Quote not
+found for symbol:
+^NSEI.NS"}}}
+02/20/2026 12:05:43
+PM - $^NSEI.NS:
+possibly delisted; no
+price data found
+(period=1y) (Yahoo
+error = "No data
+found, symbol may be
+delisted")
+02/20/2026 12:05:43
+PM - No data found
+for ^NSEI.NS
+(period=1y) (Yahoo
+error = "No data
+found, symbol may be
+delisted")
+02/20/2026 12:05:43
+PM - Fetching
+sentiment for
+TCS.NS...
+02/20/2026 12:05:43
+PM - Starting
+comprehensive
+sentiment analysis
+for TCS.NS
+02/20/2026 12:05:43
+PM - Trying search
+level 1: Primary
+financial news sources
+02/20/2026 12:05:43
+PM - Success at level
+1: Found meaningful
+results
+02/20/2026 12:05:43
+PM - Starting
+multi-level GNews
+search for TCS.NS
+02/20/2026 12:05:43
+PM - Trying search
+level 1: Primary
+financial news sources
+02/20/2026 12:05:46
+PM - Level 1 returned
+insufficient results,
+trying next level
+02/20/2026 12:05:46
+PM - Trying search
+level 2: Secondary
+news sources
+02/20/2026 12:05:50
+PM - Level 2 returned
+insufficient results,
+trying next level
+02/20/2026 12:05:50
+PM - Trying search
+level 3: Regional
+news sources
+02/20/2026 12:05:55
+PM - Level 3 returned
+insufficient results,
+trying next level
+02/20/2026 12:05:55
+PM - All search
+levels failed for
+TCS.NS
+02/20/2026 12:05:55
+PM - Multi-level
+search failed, trying
+basic search for
+TCS.NS
+02/20/2026 12:05:57
+PM - Found 7 articles
+for query: "Tata
+Consultancy Services
+Limited" OR "Tata
+Consu...
+02/20/2026 12:05:57
+PM - Starting
+multi-level Google
+News search for
+TCS.NS with 5 levels
+02/20/2026 12:05:57
+PM - Level 1 (Primary
+financial news
+sources): trying
+query '("Tata
+Consultancy Services
+Limited" OR "Tata
+Consultancy
+Services") AND (stock
+OR shares OR earnings
+OR financial OR
+results)'
+02/20/2026 12:06:09
+PM - Level 1
+successful: found 10
+articles
+02/20/2026 12:06:09
+PM - Found 10 Google
+News articles for
+TCS.NS
+02/20/2026 12:06:09
+PM - MCP Trading
+Server components
+loaded successfully
+02/20/2026 12:06:09
+PM - All MCP agents
+loaded successfully
+02/20/2026 12:06:09
+PM - TA library
+loaded successfully
+02/20/2026 12:06:09
+PM - MCP Trading
+Server components
+loaded successfully
+02/20/2026 12:06:09
+PM - All MCP agents
+loaded successfully
+02/20/2026 12:06:09
+PM - LangChain and
+LangGraph components
+available
+02/20/2026 12:06:09
+PM - Sentiment Tool te
+stindia_sentiment_tool
+ initialized with 10
+Indian RSS sources
+02/20/2026 12:06:09
+PM - Analyzing Indian
+news sentiment for
+TCS.NS
+02/20/2026 12:06:11
+PM - Successfully
+fetched 4 items from h
+ttps://www.moneycontro
+l.com/rss/marketreport
+s.xml
+02/20/2026 12:06:11
+PM - Found 0 relevant
+items for TCS.NS out
+of 4 total items
+02/20/2026 12:06:11
+PM - ??? SUCCESS: http
+s://www.moneycontrol.c
+om/rss/marketreports.x
+ml - Fetched 0
+relevant items
+02/20/2026 12:06:15
+PM - Successfully
+fetched 5 items from h
+ttps://economictimes.i
+ndiatimes.com/markets/
+stocks/rssfeeds/214684
+2.cms
+02/20/2026 12:06:15
+PM - Found 0 relevant
+items for TCS.NS out
+of 5 total items
+02/20/2026 12:06:15
+PM - ??? SUCCESS: http
+s://economictimes.indi
+atimes.com/markets/sto
+cks/rssfeeds/2146842.c
+ms - Fetched 0
+relevant items
+02/20/2026 12:06:18
+PM - Successfully
+fetched 5 items from h
+ttps://www.business-st
+andard.com/rss/markets
+-106.rss
+02/20/2026 12:06:18
+PM - Found 0 relevant
+items for TCS.NS out
+of 5 total items
+02/20/2026 12:06:18
+PM - ??? SUCCESS: http
+s://www.business-stand
+ard.com/rss/markets-10
+6.rss - Fetched 0
+relevant items
+02/20/2026 12:06:20
+PM - Successfully
+fetched 0 items from h
+ttps://www.hindubusine
+ssline.com/markets/rss
+feed/?id=1016
+02/20/2026 12:06:20
+PM - ??? FAILED: https
+://www.hindubusinessli
+ne.com/markets/rssfeed
+/?id=1016 - No items
+fetched
+02/20/2026 12:06:24
+PM - Successfully
+fetched 5 items from h
+ttps://in.investing.co
+m/rss/market_overview.
+rss
+02/20/2026 12:06:24
+PM - Found 0 relevant
+items for TCS.NS out
+of 5 total items
+02/20/2026 12:06:24
+PM - ??? SUCCESS: http
+s://in.investing.com/r
+ss/market_overview.rss
+ - Fetched 0 relevant
+items
+02/20/2026 12:06:26
+PM - Successfully
+fetched 5 items from h
+ttps://www.livemint.co
+m/rss/markets
+02/20/2026 12:06:26
+PM - Found 0 relevant
+items for TCS.NS out
+of 5 total items
+02/20/2026 12:06:26
+PM - ??? SUCCESS: http
+s://www.livemint.com/r
+ss/markets - Fetched
+0 relevant items
+02/20/2026 12:06:28
+PM - Successfully
+fetched 0 items from h
+ttps://timesofindia.in
+diatimes.com/rssfeeds/
+2146842.cms
+02/20/2026 12:06:28
+PM - ??? FAILED: https
+://timesofindia.indiat
+imes.com/rssfeeds/2146
+842.cms - No items
+fetched
+02/20/2026 12:06:47
+PM - Successfully
+fetched 0 items from h
+ttps://economictimes.i
+ndiatimes.com/markets/
+stocks/rssfeeds/127417
+57.cms
+02/20/2026 12:06:47
+PM - ??? FAILED: https
+://economictimes.india
+times.com/markets/stoc
+ks/rssfeeds/12741757.c
+ms - No items fetched
+02/20/2026 12:06:58
+PM - Successfully
+fetched 0 items from h
+ttps://www.reuters.com
+/news/archive/business
+News
+02/20/2026 12:06:58
+PM - ??? FAILED: https
+://www.reuters.com/new
+s/archive/businessNews
+ - No items fetched
+02/20/2026 12:07:04
+PM - Successfully
+fetched 5 items from h
+ttps://www.cnbc.com/id
+/100003114/device/rss/
+rss.html
+02/20/2026 12:07:04
+PM - Found 0 relevant
+items for TCS.NS out
+of 5 total items
+02/20/2026 12:07:04
+PM - ??? SUCCESS: http
+s://www.cnbc.com/id/10
+0003114/device/rss/rss
+.html - Fetched 0
+relevant items
+02/20/2026 12:07:04
+PM - === Indian News
+Sentiment Analysis
+Summary for TCS.NS ===
+02/20/2026 12:07:04
+PM - Total sources: 10
+02/20/2026 12:07:04
+PM - Working sources
+(6):
+02/20/2026 12:07:04
+PM -   ??? https://www
+.moneycontrol.com/rss/
+marketreports.xml
+02/20/2026 12:07:04
+PM -   ??? https://eco
+nomictimes.indiatimes.
+com/markets/stocks/rss
+feeds/2146842.cms
+02/20/2026 12:07:04
+PM -   ??? https://www
+.business-standard.com
+/rss/markets-106.rss
+02/20/2026 12:07:04
+PM -   ??? https://in.
+investing.com/rss/mark
+et_overview.rss
+02/20/2026 12:07:04
+PM -   ??? https://www
+.livemint.com/rss/mark
+ets
+02/20/2026 12:07:04
+PM -   ??? https://www
+.cnbc.com/id/100003114
+/device/rss/rss.html
+02/20/2026 12:07:04
+PM - Failing sources
+(4):
+02/20/2026 12:07:04
+PM -   ??? https://www
+.hindubusinessline.com
+/markets/rssfeed/?id=1
+016
+02/20/2026 12:07:04
+PM -   ??? https://tim
+esofindia.indiatimes.c
+om/rssfeeds/2146842.cm
+s
+02/20/2026 12:07:04
+PM -   ??? https://eco
+nomictimes.indiatimes.
+com/markets/stocks/rss
+feeds/12741757.cms
+02/20/2026 12:07:04
+PM -   ??? https://www
+.reuters.com/news/arch
+ive/businessNews
+02/20/2026 12:07:04
+PM - No news items
+found, returning
+neutral sentiment
+02/20/2026 12:07:04
+PM - Fetching
+institutional
+investments data for
+TCS.NS...
+02/20/2026 12:07:05
+PM - ??? Successfully
+fetched institutional
+data for TCS.NS on
+attempt 1
+02/20/2026 12:07:05
+PM - Fetching
+extended data for
+TCS.NS for ML
+analysis...
+02/20/2026 12:07:05
+PM - Using Yahoo
+Finance data for
+TCS.NS (3mo)
+02/20/2026 12:07:05
+PM - Generating
+adversarial financial
+data for TCS.NS...
+02/20/2026 12:07:05
+PM - Error generating
+adversarial data:
+Invalid value
+'2741723.235856703'
+for dtype 'int64'
+02/20/2026 12:07:05
+PM - Engineering
+features for ML
+pattern recognition...
+02/20/2026 12:07:06
+PM - Preparing data
+for ML prediction...
+02/20/2026 12:07:06
+PM - Checking feature
+matrix for invalid
+values...
+02/20/2026 12:07:06
+PM - Training TOP 5
+INDUSTRY-LEVEL ML
+models for TCS.NS...
+02/20/2026 12:07:06
+PM - XGBoost imported
+successfully
+02/20/2026 12:07:06
+PM - LightGBM
+imported successfully
+02/20/2026 12:07:06
+PM - CatBoost not
+available: No module
+named 'catboost'
+02/20/2026 12:07:06
+PM - Scikit-learn
+imported successfully
+02/20/2026 12:07:06
+PM - Training XGBoost
+model...
+02/20/2026 12:07:06
+PM - XGBoost model
+trained successfully
+02/20/2026 12:07:06
+PM - Training
+LightGBM model...
+02/20/2026 12:07:06
+PM - LightGBM model
+trained successfully
+02/20/2026 12:07:06
+PM - Training Extra
+Trees model...
+02/20/2026 12:07:06
+PM - Extra Trees
+model trained
+successfully
+02/20/2026 12:07:06
+PM - Training SVR
+model...
+02/20/2026 12:07:06
+PM - SVR model
+trained successfully
+02/20/2026 12:07:06
+PM - Training MLP
+Neural Network...
+02/20/2026 12:07:06
+PM - MLP Neural
+Network trained
+successfully
+02/20/2026 12:07:06
+PM - Creating
+advanced ensemble
+models...
+02/20/2026 12:07:07
+PM - Ensemble model
+created successfully
+02/20/2026 12:07:07
+PM - Creating
+stacking ensemble...
+02/20/2026 12:07:09
+PM - Stacking
+ensemble created
+successfully
+02/20/2026 12:07:09
+PM - Evaluating 7
+trained models...
+02/20/2026 12:07:09
+PM - xgb - R2:
+0.8001, Prediction:
+2688.75
+02/20/2026 12:07:09
+PM - lgb - R2:
+0.9056, Prediction:
+2751.89
+02/20/2026 12:07:09
+PM - et - R2: 0.9540,
+Prediction: 2723.57
+02/20/2026 12:07:09
+PM - svr - R2:
+0.8581, Prediction:
+2787.21
+02/20/2026 12:07:09
+PM - mlp - R2:
+0.6019, Prediction:
+2751.87
+02/20/2026 12:07:09
+PM - ensemble - R2:
+0.9317, Prediction:
+2740.66
+02/20/2026 12:07:09
+PM - stacking - R2:
+-0.3171, Prediction:
+3078.84
+02/20/2026 12:07:09
+PM - ??? Market
+Regime Detector
+initialized
+02/20/2026 12:07:09
+PM - Market regime:
+sideways, No
+preferred models
+available, using best
+overall
+02/20/2026 12:07:09
+PM - Adaptive ML
+model selection: et
+(R2: 0.9540) for
+sideways regime
+02/20/2026 12:07:09
+PM - Best ML model
+for TCS.NS: et (R2:
+0.9540)
+02/20/2026 12:07:09
+PM - Performing
+adversarial training
+for TCS.NS...
+02/20/2026 12:07:09
+PM - Cleaning input
+data...
+02/20/2026 12:07:09
+PM - Converting data
+to tensors...
+02/20/2026 12:07:09
+PM - Generating
+training sequences...
+02/20/2026 12:07:09
+PM - Creating
+sequences with length
+20...
+02/20/2026 12:07:09
+PM - Input data
+shape:
+torch.Size([98, 62]),
+Target data shape:
+torch.Size([98])
+02/20/2026 12:07:09
+PM - Can create 78
+sequences
+02/20/2026 12:07:09
+PM - Created
+sequences - X shape:
+torch.Size([78, 20,
+62]), Y shape:
+torch.Size([78])
+02/20/2026 12:07:09
+PM - Generating test
+sequences...
+02/20/2026 12:07:09
+PM - Creating
+sequences with length
+20...
+02/20/2026 12:07:09
+PM - Input data
+shape:
+torch.Size([25, 62]),
+Target data shape:
+torch.Size([25])
+02/20/2026 12:07:09
+PM - Can create 5
+sequences
+02/20/2026 12:07:09
+PM - Created
+sequences - X shape:
+torch.Size([5, 20,
+62]), Y shape:
+torch.Size([5])
+02/20/2026 12:07:09
+PM - Initializing
+LSTM and Transformer
+models...
+02/20/2026 12:07:09
+PM - Starting
+adversarial training
+for LSTM and
+Transformer...
+02/20/2026 12:07:19
+PM - Epoch [10/50],
+LSTM Loss: 0.0698,
+Transformer Loss:
+0.0376, LR: 0.001000
+02/20/2026 12:07:28
+PM - Epoch [20/50],
+LSTM Loss: 0.0508,
+Transformer Loss:
+0.0327, LR: 0.000500
+02/20/2026 12:07:38
+PM - Epoch [30/50],
+LSTM Loss: 0.0428,
+Transformer Loss:
+0.0310, LR: 0.001000
+02/20/2026 12:07:47
+PM - Epoch [40/50],
+LSTM Loss: 0.0424,
+Transformer Loss:
+0.0371, LR: 0.000854
+02/20/2026 12:07:56
+PM - Epoch [50/50],
+LSTM Loss: 0.0344,
+Transformer Loss:
+0.0268, LR: 0.000500
+02/20/2026 12:07:56
+PM - Evaluating
+models...
+02/20/2026 12:07:56
+PM - Evaluating
+adversarial
+robustness...
+02/20/2026 12:07:56
+PM - Performing RL
+training with
+adversarial events
+for TCS.NS...
+02/20/2026 12:07:56
+PM - Training
+adversarial RL
+agent...
+02/20/2026 12:07:58
+PM - Adversarial
+Episode 10/100, Total
+Reward: 688806.96,
+Events: 19
+02/20/2026 12:07:59
+PM - Adversarial
+Episode 20/100, Total
+Reward: -81151.95,
+Events: 15
+02/20/2026 12:08:01
+PM - Adversarial
+Episode 30/100, Total
+Reward: -77231.77,
+Events: 11
+02/20/2026 12:08:02
+PM - Adversarial
+Episode 40/100, Total
+Reward: 472395.84,
+Events: 12
+02/20/2026 12:08:04
+PM - Adversarial
+Episode 50/100, Total
+Reward: 372775.57,
+Events: 15
+02/20/2026 12:08:06
+PM - Adversarial
+Episode 60/100, Total
+Reward: -157753.57,
+Events: 11
+02/20/2026 12:08:07
+PM - Adversarial
+Episode 70/100, Total
+Reward: -635181.77,
+Events: 10
+02/20/2026 12:08:09
+PM - Adversarial
+Episode 80/100, Total
+Reward: 435928.37,
+Events: 11
+02/20/2026 12:08:10
+PM - Adversarial
+Episode 90/100, Total
+Reward: -225436.10,
+Events: 9
+02/20/2026 12:08:12
+PM - Adversarial
+Episode 100/100,
+Total Reward:
+-421388.75, Events: 12
+02/20/2026 12:08:12
+PM - Using Yahoo
+Finance data for
+SUZLON.NS (1d)
+02/20/2026 12:08:13
+PM - Using Yahoo
+Finance data for
+RAJOOENG.NS (1d)
+02/20/2026 12:08:13
+PM - Using Yahoo
+Finance data for
+TCS.NS (1y)
+02/20/2026 12:08:13
+PM - === TRADING
+DECISION FOR TCS.NS
+===
+02/20/2026 12:08:13
+PM - Current Price:
+Rs.2683.90
+02/20/2026 12:08:13
+PM - Available Cash:
+Rs.654.61
+02/20/2026 12:08:13
+PM - Total Portfolio
+Value: Rs.1040.22
+02/20/2026 12:08:13
+PM - ???? CASH
+AVAILABLE: Rs.654.61
+- Checking for buy
+opportunities
+02/20/2026 12:08:13
+PM - === STARTING
+PROFESSIONAL BUY
+EVALUATION FOR TCS.NS
+===
+02/20/2026 12:08:13
+PM - All required
+data present for
+TCS.NS
+02/20/2026 12:08:13
+PM - === PROFESSIONAL
+BUY EVALUATION:
+TCS.NS ===
+02/20/2026 12:08:13
+PM - Current Price:
+2683.90
+02/20/2026 12:08:13
+PM - Market Context:
+sideways (strength:
+0.30)
+02/20/2026 12:08:13
+PM - ???
+Multi-Timeframe
+Analyzer initialized
+02/20/2026 12:08:13
+PM - MTF Validation
+for TCS.NS:
+{'is_valid': True,
+'reason': 'Validation
+passed',
+'confirmation_score':
+0.8}
+02/20/2026 12:08:13
+PM - ??? Market
+Regime Detector
+initialized
+02/20/2026 12:08:13
+PM - Market regime
+adaptation: NEUTRAL
+->
+{'rsi_buy_threshold':
+30,
+'rsi_sell_threshold':
+70, 'position_size_mul
+tiplier': 0.9, 'stop_l
+oss_multiplier': 1.0,
+'signal_sensitivity':
+1.0, 'volatility_adjus
+tment': 1.0}
+02/20/2026 12:08:13
+PM - Generated 2
+technical signals
+02/20/2026 12:08:13
+PM -   Technical
+signal: breakout,
+triggered: True,
+strength: 0.120,
+confidence: 0.850
+02/20/2026 12:08:13
+PM -   Technical
+signal:
+stoch_oversold,
+triggered: True,
+strength: -0.264,
+confidence: 0.750
+02/20/2026 12:08:13
+PM - 2 triggered
+technical signals
+02/20/2026 12:08:13
+PM - Average strength
+too low: -0.072 < 0.3
+02/20/2026 12:08:13
+PM - Generated 1
+value signals
+02/20/2026 12:08:13
+PM -   Value signal:
+sustainable_dividend,
+triggered: True,
+strength: 1.000,
+confidence: 0.550
+02/20/2026 12:08:13
+PM - 1 triggered
+value signals
+02/20/2026 12:08:13
+PM - Combined value
+signal created:
+strength=1.000,
+confidence=0.550
+02/20/2026 12:08:13
+PM - Generated 1
+sentiment signals
+02/20/2026 12:08:13
+PM -   Sentiment
+signal:
+positive_sentiment,
+triggered: True,
+strength: 1.000,
+confidence: 0.700
+02/20/2026 12:08:13
+PM - 1 triggered
+sentiment signals
+02/20/2026 12:08:13
+PM - Combined
+sentiment signal
+created:
+strength=1.000,
+confidence=0.700
+02/20/2026 12:08:13
+PM - Generated 2 ML
+signals
+02/20/2026 12:08:13
+PM -   ML signal: ml_b
+ullish_prediction,
+triggered: True,
+strength: 1.125,
+confidence: 1.000
+02/20/2026 12:08:13
+PM -   ML signal: rl_b
+uy_recommendation,
+triggered: True,
+strength: 0.900,
+confidence: 1.000
+02/20/2026 12:08:13
+PM - 2 triggered ML
+signals
+02/20/2026 12:08:13
+PM - Combined ML
+signal created:
+strength=1.012,
+confidence=1.000
+02/20/2026 12:08:13
+PM - Generated 1
+market signals
+02/20/2026 12:08:13
+PM -   Market signal:
+low_market_stress,
+triggered: True,
+strength: -0.200,
+confidence: 0.650
+02/20/2026 12:08:13
+PM - 1 triggered
+market signals
+02/20/2026 12:08:13
+PM - Combined market
+signal created:
+strength=-0.200,
+confidence=0.650
+02/20/2026 12:08:13
+PM - Generated 4
+combined signals (one
+per category)
+02/20/2026 12:08:13
+PM - 4 triggered
+category signals:
+02/20/2026 12:08:13
+PM -   Value Signal:
+02/20/2026 12:08:13
+PM -     -
+value_combined: ???
+TRIGGERED
+02/20/2026 12:08:13
+PM -       Strength:
+1.000, Weight: 0.250,
+Confidence: 0.550
+02/20/2026 12:08:13
+PM -       Reasoning:
+Combined value signal
+from 1 indicators
+02/20/2026 12:08:13
+PM -   Sentiment
+Signal:
+02/20/2026 12:08:13
+PM -     -
+sentiment_combined:
+??? TRIGGERED
+02/20/2026 12:08:13
+PM -       Strength:
+1.000, Weight: 0.250,
+Confidence: 0.700
+02/20/2026 12:08:13
+PM -       Reasoning:
+Combined sentiment
+signal from 1
+indicators
+02/20/2026 12:08:13
+PM -   ML Signal:
+02/20/2026 12:08:13
+PM -     -
+ml_combined: ???
+TRIGGERED
+02/20/2026 12:08:13
+PM -       Strength:
+1.012, Weight: 0.200,
+Confidence: 1.000
+02/20/2026 12:08:13
+PM -       Reasoning:
+Combined ML signal
+from 2 models
+02/20/2026 12:08:13
+PM -   Market Signal:
+02/20/2026 12:08:13
+PM -     -
+market_combined: ???
+TRIGGERED
+02/20/2026 12:08:13
+PM -       Strength:
+-0.200, Weight:
+0.100, Confidence:
+0.650
+02/20/2026 12:08:13
+PM -       Reasoning:
+Combined market
+signal from 1
+indicators
+02/20/2026 12:08:13
+PM - Cross-category
+check: 4 categories
+triggered: Value,
+Market, Sentiment, ML
+02/20/2026 12:08:13
+PM - Cross-category
+confirmation: PASS
+(need at least 3)
+02/20/2026 12:08:13
+PM - Cross-category
+confirmation: True
+(Categories: Value,
+Market, Sentiment, ML)
+02/20/2026 12:08:13
+PM - Bearish block
+filter: False (0
+bearish signals, 0.0%
+of triggered signals)
+02/20/2026 12:08:13
+PM - Signal Analysis
+Summary:
+02/20/2026 12:08:13
+PM -   Signal Count:
+4 (Required: 3-5) -
+??? PASS
+02/20/2026 12:08:13
+PM -   Average
+Confidence: 0.725
+(Threshold: 0.7) -
+??? PASS
+02/20/2026 12:08:13
+PM -   Weighted
+Score: 0.682
+(Threshold: 0.25) -
+??? PASS
+02/20/2026 12:08:13
+PM - ??? ALL
+THRESHOLD CHECKS
+PASSED - Proceeding
+with buy decision
+02/20/2026 12:08:13
+PM - Applying market
+context filters -
+Market Trend: sideways
+02/20/2026 12:08:13
+PM - Calculating
+enhanced position
+sizing - Weighted
+Score: 0.682
+02/20/2026 12:08:13
+PM - Base position
+scale from weighted
+score: 0.682
+02/20/2026 12:08:13
+PM - ML signals
+detected - average
+confidence: 1.000
+02/20/2026 12:08:13
+PM - High-confidence
+ML boost applied -
+position scale
+increased from 0.682
+to 0.785
+02/20/2026 12:08:13
+PM - Final position
+scale (capped): 0.785
+02/20/2026 12:08:13
+PM - Final Buy
+Decision: Should Buy:
+True, Confidence:
+0.725, Buy
+Percentage: 0.785
+02/20/2026 12:08:13
+PM - Professional Buy
+Decision for TCS.NS:
+02/20/2026 12:08:13
+PM -   Should Buy:
+True
+02/20/2026 12:08:13
+PM -   Confidence:
+0.725
+02/20/2026 12:08:13
+PM -   Buy
+Percentage: 0.785
+02/20/2026 12:08:13
+PM -   Reason: BuyReas
+on.TECHNICAL_BREAKOUT
+02/20/2026 12:08:13
+PM -   Signals
+Triggered: 4
+02/20/2026 12:08:13
+PM -   Reasoning:
+Professional buy
+confirmed: 4
+categories triggered,
+confidence 0.725,
+weighted score 0.682
+| ENHANCED POSITION
+SIZING (78.5%)
+02/20/2026 12:08:13
+PM - ???? BUY
+DECISION FINALIZED: 1
+shares of TCS.NS
+02/20/2026 12:08:13
+PM -    Price:
+???2683.90
+02/20/2026 12:08:13
+PM -    Stop Loss:
+???2470.66
+02/20/2026 12:08:13
+PM -    Take Profit:
+???2860.77
+02/20/2026 12:08:13
+PM -    Confidence:
+0.725
+02/20/2026 12:08:13
+PM -    Reason:
+technical_breakout
+02/20/2026 12:08:13
+PM -    Professional
+Reasoning:
+Professional buy
+confirmed: 4
+categories triggered,
+confidence 0.725,
+weighted score 0.682
+| ENHANCED POSITION
+SIZING (78.5%)
+02/20/2026 12:08:13
+PM - === END
+PROFESSIONAL BUY
+EVALUATION FOR TCS.NS
+===
+02/20/2026 12:08:13
+PM - ??????  BUY
+SIGNAL INVALID:
+Insufficient cash or
+invalid parameters
+02/20/2026 12:08:13
+PM - ???? HOLD
+DECISION: TCS.NS - No
+clear buy/sell signal
+02/20/2026 12:08:13
+PM -    ???? DETAILED
+HOLD ANALYSIS:
+02/20/2026 12:08:13
+PM -       - Position
+Status: Not Holding
+02/20/2026 12:08:13
+PM -       -
+Available Cash:
+Rs.654.61 (Sufficient)
+02/20/2026 12:08:13
+PM -       -
+Professional Logic
+Enabled: True
+02/20/2026 12:08:13
+PM - === END TRADING
+DECISION FOR TCS.NS
+===
+[OK] Loaded env from C:\Users\pc44\Downloads\trade-bot-main\backend\hft2\env
+
+============================================================
+  STEP 1: web_backend.py connectivity (port 5000)
+============================================================
+  [PASS] GET /api/health: {"status":"degraded","timestamp":"2026-02-20T12:05:22.498954","uptime":155.42474269866943,"version":
+
+============================================================
+  STEP 2: API routes
+============================================================
+  GET           /
+  POST          /api/auth/login
+  POST          /api/auth/register
+  GET           /api/auth/status
+  GET           /api/bot-data
+  POST          /api/bot/start
+  POST          /api/bot/start-with-symbol
+  POST          /api/bot/stop
+  POST          /api/chat
+  GET           /api/config/schema
+  GET           /api/config/validate
+  GET           /api/health
+  POST          /api/init
+  GET           /api/live-status
+  POST          /api/live/sync
+  POST          /api/mcp/analyze
+  POST          /api/mcp/chat
+  POST          /api/mcp/execute
+  POST          /api/mcp/predict
+  POST          /api/mcp/scan
+  GET           /api/mcp/status
+  GET           /api/monitoring
+  POST          /api/order
+  GET           /api/portfolio
+  GET           /api/portfolio/realtime
+  GET           /api/production/decision-history
+  GET           /api/production/learning-insights
+  POST          /api/production/make-decision
+  GET           /api/production/risk-metrics
+  GET           /api/production/signal-performance
+  GET,POST      /api/settings
+  POST          /api/start
+  GET           /api/status
+  POST          /api/stop
+  GET           /api/trades
+  GET,POST      /api/user/profile
+  GET,POST      /api/watchlist
+  POST          /api/watchlist/add/{ticker}
+  POST          /api/watchlist/bulk
+  DELETE        /api/watchlist/remove/{ticker}
+  GET           /app.js
+  GET           /styles.css
+  GET           /web
+
+============================================================
+  STEP 3: Bot status BEFORE /api/start
+============================================================
+  [PASS] GET /api/status: {"is_running":true,"last_update":"2026-02-20T12:05:22.553112","mode":"live"}
+
+============================================================
+  STEP 4: POST /api/start  (initialize + start bot)
+============================================================
+  INFO: Calling /api/start (waits up to 60s for init)...
+  [PASS] POST /api/start: (0.8s) {"message":"Bot started successfully with LOW risk level (Stop Loss: 3.0%, Max Allocation: 15.0%, Watchlist: 1 tickers). Predictions running in background..."}
+
+============================================================
+  STEP 5: Bot status AFTER /api/start
+============================================================
+  [PASS] is_running == True: {'is_running': True, 'last_update': '2026-02-20T12:05:23.394851', 'mode': 'live'}
+
+============================================================
+  STEP 6: Watchlist
+============================================================
+  [PASS] GET /api/watchlist: Tickers: ['TCS.NS']
+
+  => Testing with ticker: TCS.NS
+
+============================================================
+  STEP 7: POST /api/bot/start-with-symbol  (HFT2 pipeline for TCS.NS)
+============================================================
+  INFO: Triggering full HFT2 analysis for TCS.NS...
+  INFO: analyze_stock -> predictions -> trading decision
+  [PASS] POST /api/bot/start-with-symbol: (0.8s)  {"status":"success","message":"Bot started with symbol TCS.NS. Analysis running in background.","symbol":"TCS.NS","isRunning":true,"watchlist":["TCS.NS"],"prediction":null,"analysis":null,"timestamp":"2026-02-20T12:05:23.410319"}
+
+============================================================
+  STEP 8: GET /api/bot-data
+============================================================
+  [PASS] GET /api/bot-data
+    config: dict(5 keys) -> ['mode', 'tickers', 'stopLossPct', 'maxAllocation', 'maxTradeLimit']
+    isRunning: True
+    lastUpdate: 2026-02-20T12:05:25.385904
+    portfolio: dict(7 keys) -> ['totalValue', 'cash', 'holdings', 'startingBalance', 'unrealizedPnL', 'realizedPnL']
+
+============================================================
+  STEP 9: Direct testindia.py StockTradingBot + analyze_stock
+============================================================
+  INFO: Testing TCS.NS  (3mo data, 7-day prediction)
+  INFO: First run downloads data + trains models (may take 5-15 min)...
+  [PASS] import testindia
+  [PASS] StockTradingBot class exists
+  INFO: Creating StockTradingBot (no FinBERT download now)...
+  [PASS] StockTradingBot.__init__ in 0.4s (<30s expected): 0.4s
+  [PASS] bot._advanced_sentiment_analyzer is None (lazy, not downloaded)
+  [PASS] bot.stock_analyzer is Stock
+
+  INFO: Running analyze_stock(TCS.NS) ... this may take a while ...
+  [PASS] analyze_stock returned success in 154.2s: keys: ['success', 'stock_data', 'recommendation', 'buy_score', 'sell_score', 'technical_indicators', 'fundamental_analysis', 'sentiment_analysis', 'mpt_metrics', 'institutional_holders']
+
+  === PREDICTION RESULTS for TCS.NS ===
+    recommendation: NEUTRAL
+    buy_score: 0.0
+    sell_score: 0.0
+
+  INFO: Testing make_trading_decision with analysis result ...
+  [PASS] make_trading_decision: result: {'action': 'hold', 'ticker': 'TCS.NS', 'qty': 0, 'price': 2683.9, 'success': True, 'confidence_score': 0.5, 'reason': 'no_clear_signal'}
+
+============================================================
+  TEST COMPLETE
+============================================================
+  PASS = step worked correctly
+  FAIL = step had an error
+  Check above for full prediction results
+

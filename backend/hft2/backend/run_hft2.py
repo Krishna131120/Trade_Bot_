@@ -3,10 +3,12 @@
 Single entry point to run the full HFT2 stack:
 - Fyers data service (port 8002) - with FYERS_ALLOW_MOCK=true if Fyers API unavailable
 - MCP server (API on 8003, monitoring 8004)
-- Web backend (port 5000) - requires pandas_market_calendars, testindia
-- Simple HFT2 API (port 5001) - runs in foreground; Ctrl+C stops all
+- Web backend (port 5000) - the REAL bot API; all /api/start, /api/stop, predictions here
+  Frontend hftApiService.ts talks to port 5000 by default.
+- Monitors web_backend and auto-restarts if it crashes; Ctrl+C stops all
 
-Usage: from backend/hft2/backend run:  python run_hft2.py
+Usage:  cd backend/hft2/backend
+        python run_hft2.py
 """
 import os
 import sys
@@ -200,22 +202,36 @@ def main():
     else:
         print(f"[run_hft2] NOTE: Start api_server.py separately for market scan: cd backend && python api_server.py")
 
-    # 5) Simple HFT2 API on 5001 in foreground (this blocks until Ctrl+C)
-    port = 5001
-    if is_port_in_use(port):
-        print(f"[run_hft2] ERROR: Port {port} is already in use!")
-        print(f"[run_hft2] Kill the existing process or use a different port.")
-        print(f"[run_hft2] On Windows: netstat -ano | findstr :{port}  then  taskkill /PID <PID> /F")
-        kill_children()
-        sys.exit(1)
-    
-    print(f"[run_hft2] Starting HFT2 API on port {port} (Ctrl+C stops all)...")
-    print(f"[run_hft2] Frontend BOT section: http://127.0.0.1:{port}/api/bot-data")
-    print(f"[run_hft2] Frontend Market Scan: http://127.0.0.1:{api_server_port}/tools/predict (requires api_server.py running separately)")
-    import uvicorn
-    from simple_app import app
+    # 5) Keep alive - web_backend (5000) IS the frontend's bot section.
+    #    The frontend hftApiService.ts defaults to http://127.0.0.1:5000
+    #    simple_app.py (port 5001) is NOT used; all real bot logic is in web_backend.
+    print(f"[run_hft2] ============================================================")
+    print(f"[run_hft2]  HFT2 stack is running. Press Ctrl+C to stop all.")
+    print(f"[run_hft2]  Frontend BOT section -> http://127.0.0.1:5000/api/bot-data")
+    print(f"[run_hft2]  Start bot           -> POST http://127.0.0.1:5000/api/start")
+    print(f"[run_hft2]  API docs            -> http://127.0.0.1:5000/docs")
+    if is_port_in_use(api_server_port):
+        print(f"[run_hft2]  Market Scan        -> http://127.0.0.1:{api_server_port}/tools/predict")
+    else:
+        print(f"[run_hft2]  Market Scan: start api_server separately: cd backend && python api_server.py")
+    print(f"[run_hft2] ============================================================")
     try:
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+        # Block here; Ctrl+C goes to sig_handler which kills children and exits
+        while True:
+            time.sleep(5)
+            # Restart web_backend if it crashed
+            if web_backend_proc and web_backend_proc.poll() is not None:
+                print("[run_hft2] web_backend (5000) exited unexpectedly — restarting...")
+                children.remove(web_backend_proc)
+                new_proc = start_subprocess(
+                    "web_backend (5000)",
+                    [sys.executable, "web_backend.py", "--host", "0.0.0.0", "--port", "5000"],
+                    env_extra={"PYTHONUNBUFFERED": "1"},
+                    wait_ready_sec=5,
+                    inherit_io=True,
+                )
+                if new_proc:
+                    web_backend_proc = new_proc
     finally:
         kill_children()
 

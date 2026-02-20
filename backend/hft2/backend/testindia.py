@@ -6207,8 +6207,9 @@ class StockTradingBot:
         # Changed to India timezone
         self.timezone = pytz.timezone("Asia/Kolkata")
 
-        # Initialize advanced sentiment analyzer first (needed for Stock class)
-        self.advanced_sentiment_analyzer = self._initialize_advanced_sentiment_analyzer()
+        # Defer FinBERT download to first use to avoid blocking startup (download is >60s)
+        self._advanced_sentiment_analyzer = None
+        self._sentiment_analyzer_initialized = False
 
         self.data_feed = DataFeed(config["tickers"])
         self.portfolio = VirtualPortfolio(config)
@@ -6219,7 +6220,7 @@ class StockTradingBot:
             reddit_client_id=config.get("reddit_client_id"),
             reddit_client_secret=config.get("reddit_client_secret"),
             reddit_user_agent=config.get("reddit_user_agent"),
-            advanced_sentiment_analyzer=self.advanced_sentiment_analyzer
+            advanced_sentiment_analyzer=None  # loaded lazily on first sentiment call
         )
 
         # Real-time monitoring attributes
@@ -6329,9 +6330,25 @@ class StockTradingBot:
         # Initialize adaptive ML model selector for dynamic model selection
         self.adaptive_model_selector = self._initialize_adaptive_model_selector()
 
+
     def fetch_combined_sentiment(self, ticker):
         """Delegate to stock_analyzer.fetch_combined_sentiment"""
         return self.stock_analyzer.fetch_combined_sentiment(ticker)
+
+    @property
+    def advanced_sentiment_analyzer(self):
+        """Lazy-load FinBERT on first use to avoid blocking bot startup."""
+        if not self._sentiment_analyzer_initialized:
+            self._sentiment_analyzer_initialized = True
+            logger.info("⏳ Lazy-loading FinBERT sentiment model (first use)...")
+            self._advanced_sentiment_analyzer = self._initialize_advanced_sentiment_analyzer()
+        return self._advanced_sentiment_analyzer
+
+    @advanced_sentiment_analyzer.setter
+    def advanced_sentiment_analyzer(self, value):
+        self._advanced_sentiment_analyzer = value
+        self._sentiment_analyzer_initialized = True
+
 
     def _initialize_data_services(self):
         """Initialize unified data service manager"""
@@ -9376,6 +9393,19 @@ class StockTradingBot:
         # Stop real-time monitoring when bot stops
         self.stop_real_time_monitoring()
         logger.info("Stock Trading Bot stopped successfully")
+
+    def start(self):
+        """Start the trading bot (non-blocking). Sets bot_running flag and starts monitoring.
+        
+        The web interface calls this to activate the bot. For the full blocking trading
+        loop use run() directly. This method is safe to call from asyncio run_in_executor.
+        """
+        logger.info("▶️ StockTradingBot.start() called - activating bot")
+        self.bot_running = True
+        # Start real-time monitoring in background thread
+        if not self.real_time_monitoring:
+            self.start_real_time_monitoring()
+        logger.info("✅ Bot is now active (bot_running=True)")
 
     def stop(self):
         """Stop the trading bot gracefully"""

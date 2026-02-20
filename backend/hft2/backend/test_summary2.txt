@@ -1,0 +1,89 @@
+=== PASS/FAIL SUMMARY ===
+  [PASS] GET /api/health: {"status":"degraded","timestamp":"2026-02-20T12:05:22.498954","uptime":155.42474269866943,"version":
+  [PASS] GET /api/status: {"is_running":true,"last_update":"2026-02-20T12:05:22.553112","mode":"live"}
+  [PASS] POST /api/start: (0.8s) {"message":"Bot started successfully with LOW risk level (Stop Loss: 3.0%, Max Allocation: 15.0%, Watchlist: 1 tickers). Predictions running in background..."}
+  [PASS] is_running == True: {'is_running': True, 'last_update': '2026-02-20T12:05:23.394851', 'mode': 'live'}
+  [PASS] GET /api/watchlist: Tickers: ['TCS.NS']
+  [PASS] POST /api/bot/start-with-symbol: (0.8s)  {"status":"success","message":"Bot started with symbol TCS.NS. Analysis running in background.","symbol":"TCS.NS","isRunning":true,"watchlist":["TCS.NS"],"prediction":null,"analysis":null,"timestamp":"2026-02-20T12:05:23.410319"}
+  [PASS] GET /api/bot-data
+  [PASS] import testindia
+  [PASS] StockTradingBot class exists
+  [PASS] StockTradingBot.__init__ in 0.4s (<30s expected): 0.4s
+  [PASS] bot._advanced_sentiment_analyzer is None (lazy, not downloaded)
+  [PASS] bot.stock_analyzer is Stock
+  [PASS] analyze_stock returned success in 154.2s: keys: ['success', 'stock_data', 'recommendation', 'buy_score', 'sell_score', 'technical_indicators', 'fundamental_analysis', 'sentiment_analysis', 'mpt_metrics', 'institutional_holders']
+  [PASS] make_trading_decision: result: {'action': 'hold', 'ticker': 'TCS.NS', 'qty': 0, 'price': 2683.9, 'success': True, 'confidence_score': 0.5, 'reason': 'no_clear_signal'}
+
+=== PREDICTION / RESULT LINES ===
+advanced ensemble 
+stacking ensemble...
+ensemble created 
+PM - ensemble - R2: 
+'signal_sensitivity': 
+technical signals
+signal: breakout, 
+confidence: 0.850
+signal: 
+confidence: 0.750
+technical signals
+value signals
+PM -   Value signal: 
+confidence: 0.550
+value signals
+signal created: 
+confidence=0.550
+sentiment signals
+signal: 
+confidence: 0.700
+sentiment signals
+sentiment signal 
+confidence=0.700
+signals
+PM -   ML signal: ml_b
+confidence: 1.000
+PM -   ML signal: rl_b
+uy_recommendation, 
+confidence: 1.000
+signals
+signal created: 
+confidence=1.000
+market signals
+PM -   Market signal: 
+confidence: 0.650
+market signals
+signal created: 
+confidence=0.650
+combined signals (one 
+category signals:
+Combined value signal 
+signal from 1 
+Combined ML signal 
+signal from 1 
+bearish signals, 0.0% 
+of triggered signals)
+PM - ML signals 
+confidence: 1.000
+PM - High-confidence 
+confidence 0.725, 
+confidence 0.725, 
+clear buy/sell signal
+  GET           /api/production/signal-performance
+  [PASS] GET /api/status: {"is_running":true,"last_update":"2026-02-20T12:05:22.553112","mode":"live"}
+  [PASS] is_running == True: {'is_running': True, 'last_update': '2026-02-20T12:05:23.394851', 'mode': 'live'}
+  [PASS] StockTradingBot.__init__ in 0.4s (<30s expected): 0.4s
+  [PASS] analyze_stock returned success in 154.2s: keys: ['success', 'stock_data', 'recommendation', 'buy_score', 'sell_score', 'technical_indicators', 'fundamental_analysis', 'sentiment_analysis', 'mpt_metrics', 'institutional_holders']
+  === PREDICTION RESULTS for TCS.NS ===
+    recommendation: NEUTRAL
+    buy_score: 0.0
+    sell_score: 0.0
+
+  INFO: Testing make_trading_decision with analysis result ...
+  [PASS] make_trading_decision: result: {'action': 'hold', 'ticker': 'TCS.NS', 'qty': 0, 'price': 2683.9, 'success': True, 'confidence_score': 0.5, 'reason': 'no_clear_signal'}
+
+============================================================
+  TEST COMPLETE
+============================================================
+  PASS = step worked correctly
+  FAIL = step had an error
+  Check above for full prediction results
+
