@@ -41,14 +41,15 @@ logger.addHandler(handler)
 # Import FastAPI components with fallback handling
 try:
     import uvicorn
-    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+    from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
     from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.staticfiles import StaticFiles
-    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
 
     from pydantic import BaseModel
     import json
+    import queue as _queue_module
 except ImportError as e:
     print(f"Error importing FastAPI components: {e}")
     print("Please install FastAPI dependencies:")
@@ -616,6 +617,7 @@ def _offline_bot_data():
             "realizedPnL": 0,
             "tradeLog": [],
         },
+        "analysis": list(_last_bot_analysis.values()),
         "lastUpdate": datetime.now().isoformat(),
     }
 
@@ -631,6 +633,71 @@ groq_engine = None
 # Each analyze_stock call takes 2-3 min; running multiple in parallel saturates the thread pool
 # and causes /api/bot-data and /api/trades to time out while waiting for a free thread.
 _analysis_semaphore = asyncio.Semaphore(1)
+
+# Stores latest analysis results per symbol, exposed via /bot-data to the frontend
+_last_bot_analysis: dict = {}
+
+# ===== SSE Log Broadcasting =====
+_sse_clients: list = []
+_sse_clients_lock = threading.Lock()
+
+class _SSELogHandler(logging.Handler):
+    """Sends log records to all connected SSE clients."""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            payload = json.dumps({"type": "log", "level": record.levelname, "message": msg})
+            event = f"data: {payload}\n\n"
+            with _sse_clients_lock:
+                for q in list(_sse_clients):
+                    try:
+                        q.put_nowait(event)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+_sse_log_handler = _SSELogHandler()
+_sse_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(_sse_log_handler)
+
+
+def _build_sse_snapshot() -> dict:
+    """Lightweight bot state snapshot for SSE data push."""
+    global trading_bot, _last_bot_analysis
+    try:
+        if trading_bot:
+            bot_data = trading_bot.get_complete_bot_data()
+            portfolio = bot_data.get("portfolio", {})
+            holdings_raw = portfolio.get("holdings", {})
+            # Normalize holdings fields
+            holdings = {}
+            for sym, h in (holdings_raw or {}).items():
+                holdings[sym] = {
+                    "quantity": h.get("quantity") or h.get("qty", 0),
+                    "avgPrice": h.get("avgPrice") or h.get("avg_price", 0),
+                    "currentPrice": h.get("currentPrice") or h.get("last_price", 0),
+                }
+            return {
+                "isRunning": bot_data.get("isRunning", False),
+                "cash": portfolio.get("cash", 0),
+                "totalValue": portfolio.get("totalValue", 0),
+                "unrealizedPnL": portfolio.get("unrealizedPnL", 0),
+                "realizedPnL": portfolio.get("realizedPnL", 0),
+                "holdings": holdings,
+                "analysis": list(_last_bot_analysis.values()),
+            }
+    except Exception:
+        pass
+    return {
+        "isRunning": False,
+        "cash": 0,
+        "totalValue": 0,
+        "unrealizedPnL": 0,
+        "realizedPnL": 0,
+        "holdings": {},
+        "analysis": list(_last_bot_analysis.values()),
+    }
 
 async def trigger_all_hft2_components_for_symbol(symbol: str):
     """Reusable async function to trigger all HFT2 backend components (predictions, analysis, data fetching) for a symbol.
@@ -662,7 +729,7 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                 import yfinance as yf
                 loop = asyncio.get_event_loop()
                 def _fetch_yf_history(sym):
-                    stock = yf.Ticker(sym.replace(".NS", "").replace(".BO", ""))
+                    stock = yf.Ticker(sym)
                     return stock.history(period="1mo")
                 hist_data = await asyncio.wait_for(
                     loop.run_in_executor(None, _fetch_yf_history, symbol),
@@ -725,6 +792,11 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                         "target_price": signal.target_price,
                         "stop_loss": signal.stop_loss
                     }
+                    _last_bot_analysis[symbol] = {
+                        **analysis_result,
+                        "timestamp": datetime.now().isoformat(),
+                        "prediction": prediction_result,
+                    }
                     logger.info(f"✅ Analysis completed for {symbol}: {signal.decision.value} (confidence: {signal.confidence})")
                 except Exception as analysis_error:
                     logger.warning(f"⚠️ Analysis failed for {symbol}: {analysis_error}")
@@ -736,7 +808,22 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                     logger.info(f"✅ Data feed updated for {symbol}")
             except Exception as feed_err:
                 logger.warning(f"⚠️ Data feed update failed: {feed_err}")
-            
+
+            # Store prediction result even when analysis step is unavailable
+            if prediction_result and symbol not in _last_bot_analysis:
+                _last_bot_analysis[symbol] = {
+                    "symbol": symbol,
+                    "recommendation": "HOLD",
+                    "confidence": 0.0,
+                    "reasoning": "Analysis not available",
+                    "risk_score": 0.5,
+                    "position_size": 0,
+                    "target_price": None,
+                    "stop_loss": None,
+                    "timestamp": datetime.now().isoformat(),
+                    "prediction": prediction_result,
+                }
+
             logger.info(f"✅ HFT2 backend process completed for {symbol}")
         except Exception as process_error:
             logger.error(f"❌ Error in HFT2 backend process for {symbol}: {process_error}")
@@ -2707,6 +2794,7 @@ def _convert_dhan_portfolio_to_bot_data(dhan_portfolio: dict, include_config: bo
                         "maxTradeLimit": trading_bot.config.get("max_trade_limit", 10)
                     },
                     "portfolio": portfolio_data,
+                    "analysis": list(_last_bot_analysis.values()),
                     "lastUpdate": datetime.now().isoformat()
                 }
             except:
@@ -2723,6 +2811,7 @@ def _convert_dhan_portfolio_to_bot_data(dhan_portfolio: dict, include_config: bo
                 "maxTradeLimit": 10
             },
             "portfolio": portfolio_data,
+            "analysis": list(_last_bot_analysis.values()),
             "lastUpdate": datetime.now().isoformat()
         }
     
@@ -3150,19 +3239,24 @@ async def health_check():
             "services": {}
         }
         
-        # Check MongoDB connectivity first (critical for auth)
+        # Check MongoDB connectivity (non-blocking: 2s timeout so health endpoint stays fast)
         try:
             from db.mongo_client import get_mongo_db
+            import asyncio as _asyncio
             db = get_mongo_db("trading")
-            # Test connection with a simple operation
-            db.command("ping")
-            health_status["services"]["mongodb"] = {"status": "healthy"}
+
+            def _ping_mongo():
+                db.command("ping")
+
+            try:
+                await _asyncio.wait_for(_asyncio.to_thread(_ping_mongo), timeout=2.0)
+                health_status["services"]["mongodb"] = {"status": "healthy"}
+            except _asyncio.TimeoutError:
+                health_status["services"]["mongodb"] = {"status": "degraded", "note": "ping timeout"}
+            except Exception as _me:
+                health_status["services"]["mongodb"] = {"status": "unhealthy", "error": str(_me)[:80]}
         except Exception as e:
-            health_status["services"]["mongodb"] = {
-                "status": "unhealthy",
-                "error": str(e)[:100]
-            }
-            health_status["status"] = "degraded"
+            health_status["services"]["mongodb"] = {"status": "unavailable", "error": str(e)[:80]}
 
         # Check trading bot status
         if trading_bot:
@@ -3327,6 +3421,58 @@ async def get_configuration_schema():
     except Exception as e:
         logger.error(f"Failed to get configuration schema: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stream")
+async def stream_events(request: Request):
+    """SSE endpoint: streams live log lines and periodic bot snapshots to the frontend."""
+    client_q: "_queue_module.Queue[str]" = _queue_module.Queue(maxsize=1000)
+    with _sse_clients_lock:
+        _sse_clients.append(client_q)
+
+    async def event_generator():
+        try:
+            # Send handshake
+            yield f"data: {json.dumps({'type': 'connected', 'message': 'Stream connected'})}\n\n"
+            last_data_tick = 0.0
+            while True:
+                if await request.is_disconnected():
+                    break
+                # Drain log queue (up to 50 lines per iteration)
+                drained = 0
+                while drained < 50:
+                    try:
+                        event = client_q.get_nowait()
+                        yield event
+                        drained += 1
+                    except _queue_module.Empty:
+                        break
+                # Periodic bot snapshot every 5 s
+                now = asyncio.get_event_loop().time()
+                if now - last_data_tick >= 5.0:
+                    last_data_tick = now
+                    try:
+                        snapshot = await asyncio.get_event_loop().run_in_executor(None, _build_sse_snapshot)
+                        yield f"data: {json.dumps({'type': 'data', 'payload': snapshot})}\n\n"
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.2)
+        finally:
+            with _sse_clients_lock:
+                try:
+                    _sse_clients.remove(client_q)
+                except ValueError:
+                    pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/bot-data")

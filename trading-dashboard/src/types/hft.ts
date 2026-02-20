@@ -34,11 +34,25 @@ export interface HftTrade {
     portfolioValue?: number;
 }
 
+export interface HftSignal {
+    symbol: string;
+    recommendation: string;
+    confidence: number;
+    reasoning?: string;
+    risk_score?: number;
+    position_size?: number;
+    target_price?: number | null;
+    stop_loss?: number | null;
+    timestamp?: string;
+    prediction?: any;
+}
+
 export interface HftBotData {
     portfolio: HftPortfolio;
     config: HftBotConfig;
     isRunning: boolean;
     chatMessages: HftChatMessage[];
+    analysis?: HftSignal[];
     /** Set when Live mode + Dhan configured but portfolio fetch failed (e.g. token/network). */
     dhan_error?: string;
 }

@@ -164,7 +164,8 @@ class TradingAgent:
         if self._market_analyzer is None:
             try:
                 from ..tools.market_analysis_tool import MarketAnalysisTool
-                self._market_analyzer = MarketAnalysisTool(self.config)
+                fyers_client = self._get_fyers_client()
+                self._market_analyzer = MarketAnalysisTool(fyers_client) if fyers_client else False
             except ImportError as e:
                 logger.error(f"Failed to import MarketAnalysisTool: {e}")
                 self._market_analyzer = False
@@ -243,8 +244,8 @@ class TradingAgent:
                     current_price=market_data["current_price"],
                     technical_signals=technical_analysis,
                     market_data=market_data,
-                    portfolio_context=await self._get_portfolio_context(),
-                    risk_parameters=self._get_risk_parameters()
+                    portfolio_data=await self._get_portfolio_context(),
+                    risk_metrics=self._get_risk_parameters()
                 )
             
             # Get AI decision
@@ -506,7 +507,7 @@ class TradingAgent:
         try:
             # This would typically call an RL model service
             # For now, we'll simulate a prediction based on context
-            portfolio_context = context.portfolio_context or {}
+            portfolio_context = getattr(context, 'portfolio_data', None) or getattr(context, 'portfolio_context', None) or {}
             
             # Simple RL simulation based on portfolio conditions
             total_positions = portfolio_context.get("total_positions", 0)
@@ -543,14 +544,14 @@ class TradingAgent:
                 "proposed_action": ai_decision.metadata.get("recommendation", "HOLD"),
                 "confidence": ai_decision.confidence,
                 "market_conditions": context.market_data,
-                "risk_parameters": context.risk_parameters,
+                "risk_parameters": getattr(context, 'risk_metrics', None) or getattr(context, 'risk_parameters', None),
                 "ml_predictions": ensemble_predictions
             }
             
             # Get AI risk assessment
             async with self.groq_engine:
                 risk_response = await self.groq_engine.assess_trade_risk(
-                    trade_details, context.portfolio_context
+                    trade_details, getattr(context, 'portfolio_data', None) or getattr(context, 'portfolio_context', None)
                 )
             
             # Calculate quantitative risk metrics
@@ -635,7 +636,8 @@ class TradingAgent:
             volatility = risk_assessment.get("volatility", 0.02)
             
             # Base position size on risk tolerance
-            max_risk_amount = context.portfolio_context.get("total_capital", 100000) * self.risk_tolerance
+            _portfolio = getattr(context, 'portfolio_data', None) or getattr(context, 'portfolio_context', None) or {}
+            max_risk_amount = _portfolio.get("total_capital", 100000) * self.risk_tolerance
             
             # Adjust for volatility
             volatility_adjustment = max(0.1, 1.0 - volatility * 5)

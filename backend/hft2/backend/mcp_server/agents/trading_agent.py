@@ -156,8 +156,10 @@ class TradingAgent:
         if self._market_analyzer is None:
             try:
                 from mcp_server.tools.market_analysis_tool import MarketAnalysisTool
-                self._market_analyzer = MarketAnalysisTool(self.config)
-            except ImportError as e:
+                from fyers_client import FyersAPIClient
+                fyers_client = FyersAPIClient(self.config.get("fyers", {}))
+                self._market_analyzer = MarketAnalysisTool(fyers_client)
+            except Exception as e:
                 logger.error(f"Failed to import MarketAnalysisTool: {e}")
                 self._market_analyzer = False
         return self._market_analyzer if self._market_analyzer is not False else None
@@ -225,8 +227,8 @@ class TradingAgent:
                     current_price=market_data["current_price"],
                     technical_signals=technical_analysis,
                     market_data=market_data,
-                    portfolio_context=await self._get_portfolio_context(),
-                    risk_parameters=self._get_risk_parameters()
+                    portfolio_data=await self._get_portfolio_context(),
+                    risk_metrics=self._get_risk_parameters()
                 )
             
             # Get AI decision

@@ -9,7 +9,7 @@ import HftPortfolio from '@/components/hft/HftPortfolio';
 import HftChatAssistant from '@/components/hft/HftChatAssistant';
 import HftLoadingOverlay from '@/components/hft/HftLoadingOverlay';
 import HftSettingsModal from '@/components/hft/HftSettingsModal';
-import { hftApiService, formatCurrency, formatPercentage } from '@/services/hftApiService';
+import { hftApiService, formatCurrency, formatPercentage, createBotStream } from '@/services/hftApiService';
 import type { HftBotData, HftChatMessage } from '@/types/hft';
 import { CheckCircle2, AlertCircle, RefreshCw, Play, Square, LayoutDashboard, Briefcase, MessageCircle } from 'lucide-react';
 
@@ -41,11 +41,47 @@ export default function HftPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [liveStatus, setLiveStatus] = useState<any>(null);
     const [connected, setConnected] = useState(false);
+    const [streamLogs, setStreamLogs] = useState<string[]>([]);
 
+    // SSE stream: connect once and keep alive; also do an initial REST load
     useEffect(() => {
         initializeApp();
-        const interval = setInterval(refreshData, 30000);
-        return () => clearInterval(interval);
+
+        const stopStream = createBotStream(
+            (level, message) => {
+                setStreamLogs(prev => {
+                    const next = [...prev, `[${level}] ${message}`];
+                    return next.length > 500 ? next.slice(next.length - 500) : next;
+                });
+            },
+            (payload) => {
+                // Live bot data snapshot from SSE
+                setConnected(true);
+                setBotData(prev => ({
+                    ...prev,
+                    isRunning: payload.isRunning ?? prev.isRunning,
+                    portfolio: {
+                        ...prev.portfolio,
+                        cash: payload.cash ?? prev.portfolio.cash,
+                        totalValue: payload.totalValue ?? prev.portfolio.totalValue,
+                        unrealizedPnL: payload.unrealizedPnL ?? prev.portfolio.unrealizedPnL,
+                        realizedPnL: payload.realizedPnL ?? prev.portfolio.realizedPnL,
+                        holdings: payload.holdings && Object.keys(payload.holdings).length > 0
+                            ? payload.holdings
+                            : prev.portfolio.holdings,
+                    },
+                    analysis: payload.analysis ?? prev.analysis,
+                }));
+            },
+            () => setConnected(true),
+        );
+
+        // Fallback polling every 60 s (much less aggressive now that SSE handles live updates)
+        const interval = setInterval(refreshData, 60000);
+        return () => {
+            stopStream();
+            clearInterval(interval);
+        };
     }, []);
 
     const initializeApp = async () => {
@@ -434,7 +470,7 @@ export default function HftPage() {
                         </div>
                         <div className="p-4 md:p-6 min-h-[400px]">
                             {/* Always show components regardless of trading mode or connection status */}
-                            {activeTab === 'dashboard' && <HftDashboard botData={botData} />}
+                            {activeTab === 'dashboard' && <HftDashboard botData={botData} streamLogs={streamLogs} />}
                             {activeTab === 'portfolio' && (
                                 <HftPortfolio
                                     botData={botData}

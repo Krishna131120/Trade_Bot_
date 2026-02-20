@@ -13,11 +13,9 @@ import type {
     HftPortfolio
 } from '../types/hft';
 
-// Use same backend as main API (unified server); HFT routes are at /api/*
-// Try hft2 direct first (5001), then main backend proxy (8000)
-const API_BASE_URL = import.meta.env.VITE_API_BASE_BACKEND_URL
-    || import.meta.env.VITE_HFT_API_URL
-    || 'http://127.0.0.1:5000';  // Direct to hft2 (or 8000 for proxy)
+// Use same backend as health check so BOT and "System Offline" use one server
+import { config } from '../config';
+const API_BASE_URL = config.API_BASE_URL;
 
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({
@@ -367,6 +365,39 @@ export const hftApiService = {
         }
     },
 };
+
+// ===== SSE Stream =====
+export function createBotStream(
+    onLog: (level: string, message: string) => void,
+    onData: (payload: any) => void,
+    onConnected?: () => void,
+): () => void {
+    const url = `${API_BASE_URL}/api/stream`;
+    const es = new EventSource(url);
+
+    es.onopen = () => onConnected?.();
+
+    es.onmessage = (ev) => {
+        try {
+            const parsed = JSON.parse(ev.data);
+            if (parsed.type === 'log') {
+                onLog(parsed.level ?? 'INFO', parsed.message ?? '');
+            } else if (parsed.type === 'data') {
+                onData(parsed.payload);
+            } else if (parsed.type === 'connected') {
+                onConnected?.();
+            }
+        } catch {
+            // ignore malformed events
+        }
+    };
+
+    es.onerror = () => {
+        // EventSource will auto-reconnect; no action needed
+    };
+
+    return () => es.close();
+}
 
 // ===== Utility Functions =====
 export const formatCurrency = (amount: number | null | undefined): string => {

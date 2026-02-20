@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import styled from 'styled-components';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
@@ -14,7 +14,7 @@ import {
     Filler
 } from 'chart.js';
 import { Line, Doughnut } from 'react-chartjs-2';
-import type { HftBotData } from '../../types/hft';
+import type { HftBotData, HftSignal } from '../../types/hft';
 import { formatCurrency } from '../../services/hftApiService';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler);
@@ -140,16 +140,177 @@ const PortfolioTimestamp = styled.div`
   margin-top: 5px;
 `;
 
+const AnalysisPanel = styled.div`
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  border: 1px solid #e9ecef;
+`;
+
+const AnalysisPanelTitle = styled.h3`
+  margin: 0 0 16px 0;
+  color: #2c3e50;
+  font-size: 1rem;
+  font-weight: 600;
+`;
+
+const SignalCard = styled.div<{ $rec: string }>`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 8px;
+  border-left: 4px solid ${p =>
+    p.$rec === 'BUY' ? '#27ae60' :
+    p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
+  background: ${p =>
+    p.$rec === 'BUY' ? '#f0fff4' :
+    p.$rec === 'SELL' ? '#fff5f5' : '#fffbf0'};
+  margin-bottom: 12px;
+`;
+
+const SignalHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+`;
+
+const SignalSymbol = styled.span`
+  font-weight: 700;
+  font-size: 1rem;
+  color: #2c3e50;
+`;
+
+const SignalBadge = styled.span<{ $rec: string }>`
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: ${p =>
+    p.$rec === 'BUY' ? '#27ae60' :
+    p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
+  color: white;
+`;
+
+const SignalRow = styled.div`
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: #555;
+`;
+
+const SignalReasoning = styled.div`
+  font-size: 0.8rem;
+  color: #666;
+  line-height: 1.4;
+  border-top: 1px solid rgba(0,0,0,0.06);
+  padding-top: 8px;
+`;
+
+const NoAnalysisMsg = styled.div`
+  text-align: center;
+  padding: 24px;
+  color: #999;
+  font-size: 0.9rem;
+`;
+
+const TerminalPanel = styled.div`
+  background: #0d1117;
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #30363d;
+  margin-top: 4px;
+`;
+
+const TerminalHeader = styled.div`
+  background: #161b22;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #30363d;
+  h3 { margin: 0; color: #e6edf3; font-size: 0.85rem; font-weight: 600; }
+`;
+
+const TerminalDot = styled.span<{ $color: string }>`
+  width: 10px; height: 10px; border-radius: 50%; background: ${p => p.$color};
+`;
+
+const TerminalBody = styled.div`
+  height: 260px;
+  overflow-y: auto;
+  padding: 12px 16px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: #8b949e;
+  scroll-behavior: smooth;
+`;
+
+const TerminalLine = styled.div<{ $level?: string }>`
+  color: ${p =>
+    p.$level === 'ERROR' ? '#ff7b72' :
+    p.$level === 'WARNING' ? '#e3b341' :
+    p.$level === 'INFO' ? '#79c0ff' : '#8b949e'};
+  word-break: break-all;
+`;
+
+const HoldingsTable = styled.div`
+  overflow-x: auto;
+  margin-top: 4px;
+`;
+
+const Table = styled.table`
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+`;
+
+const Th = styled.th`
+  text-align: left;
+  padding: 8px 12px;
+  color: #7f8c8d;
+  font-weight: 600;
+  border-bottom: 2px solid #e9ecef;
+  white-space: nowrap;
+`;
+
+const Td = styled.td`
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  white-space: nowrap;
+`;
+
+const PnLCell = styled.td<{ $positive: boolean }>`
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  color: ${p => p.$positive ? '#27ae60' : '#e74c3c'};
+  font-weight: 600;
+  white-space: nowrap;
+`;
+
 type TimePeriod = '1D' | '1M' | '1Y' | 'All';
 
 interface HftDashboardProps {
     botData: HftBotData;
+    streamLogs?: string[];
 }
 
-const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
+const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [] }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('1M');
+    const terminalRef = useRef<HTMLDivElement>(null);
+
+    // Auto-scroll terminal to bottom when new logs arrive
+    useEffect(() => {
+        if (terminalRef.current) {
+            terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+        }
+    }, [streamLogs]);
 
     const getPeriodDescription = (): string => {
         switch (timePeriod) {
@@ -430,7 +591,7 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
     const allocationChartData = generateAllocationChartData();
 
     const themeWrapperClass = !isLight
-        ? '[&_.hft-metric]:!bg-slate-800 [&_.hft-metric]:!text-white [&_.hft-metric]:!border-slate-700 [&_.hft-metric_.hft-label]:!text-gray-400 [&_.hft-metric_.hft-value]:!text-white [&_.hft-chart]:!bg-slate-800 [&_.hft-chart]:!text-white [&_.hft-chart]:!border-slate-700 [&_.hft-chart_h3]:!text-white'
+        ? '[&_.hft-metric]:!bg-slate-800 [&_.hft-metric]:!text-white [&_.hft-metric]:!border-slate-700 [&_.hft-metric_.hft-label]:!text-gray-400 [&_.hft-metric_.hft-value]:!text-white [&_.hft-chart]:!bg-slate-800 [&_.hft-chart]:!text-white [&_.hft-chart]:!border-slate-700 [&_.hft-chart_h3]:!text-white [&_.hft-chart_h3]:!text-white'
         : '';
 
     return (
@@ -511,6 +672,110 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData }) => {
                     </div>
                 </ChartContainer>
             </ChartsSection>
+
+            {/* Live Holdings P&L Table */}
+            <AnalysisPanel className="hft-chart">
+                <AnalysisPanelTitle>Live Positions & P&L</AnalysisPanelTitle>
+                {Object.keys(botData.portfolio.holdings || {}).length > 0 ? (
+                    <HoldingsTable>
+                        <Table>
+                            <thead>
+                                <tr>
+                                    <Th>Symbol</Th>
+                                    <Th>Qty</Th>
+                                    <Th>Buy Price</Th>
+                                    <Th>Live Price</Th>
+                                    <Th>Value</Th>
+                                    <Th>P&L</Th>
+                                    <Th>P&L %</Th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {Object.entries(botData.portfolio.holdings).map(([sym, h]) => {
+                                    const qty = h.quantity || 0;
+                                    const buyPrice = h.avgPrice || 0;
+                                    const livePrice = h.currentPrice || buyPrice;
+                                    const value = qty * livePrice;
+                                    const pnl = (livePrice - buyPrice) * qty;
+                                    const pnlPct = buyPrice > 0 ? ((livePrice - buyPrice) / buyPrice) * 100 : 0;
+                                    return (
+                                        <tr key={sym}>
+                                            <Td><strong>{sym.replace('.NS', '').replace('.BO', '')}</strong></Td>
+                                            <Td>{qty}</Td>
+                                            <Td>₹{buyPrice.toFixed(2)}</Td>
+                                            <Td>₹{livePrice.toFixed(2)}</Td>
+                                            <Td>₹{value.toFixed(2)}</Td>
+                                            <PnLCell $positive={pnl >= 0}>
+                                                {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(2)}
+                                            </PnLCell>
+                                            <PnLCell $positive={pnlPct >= 0}>
+                                                {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                                            </PnLCell>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </Table>
+                    </HoldingsTable>
+                ) : (
+                    <NoAnalysisMsg>No open positions. Start the bot to begin trading.</NoAnalysisMsg>
+                )}
+            </AnalysisPanel>
+
+            {/* Analysis & Signals Section */}
+            <AnalysisPanel className="hft-chart">
+                <AnalysisPanelTitle>Bot Analysis & Signals</AnalysisPanelTitle>
+                {botData.analysis && botData.analysis.length > 0 ? (
+                    botData.analysis.map((sig: HftSignal, idx: number) => (
+                        <SignalCard key={idx} $rec={sig.recommendation}>
+                            <SignalHeader>
+                                <SignalSymbol>{sig.symbol}</SignalSymbol>
+                                <SignalBadge $rec={sig.recommendation}>{sig.recommendation}</SignalBadge>
+                            </SignalHeader>
+                            <SignalRow>
+                                <span>Confidence: <strong>{sig.confidence != null ? (sig.confidence * 100).toFixed(1) + '%' : 'N/A'}</strong></span>
+                                {sig.risk_score != null && <span>Risk: <strong>{(sig.risk_score * 100).toFixed(0)}%</strong></span>}
+                                {sig.target_price != null && <span>Target: <strong>₹{sig.target_price}</strong></span>}
+                                {sig.stop_loss != null && <span>Stop Loss: <strong>₹{sig.stop_loss}</strong></span>}
+                                {sig.timestamp && <span style={{ marginLeft: 'auto', color: '#aaa', fontSize: '0.75rem' }}>{new Date(sig.timestamp).toLocaleTimeString('en-IN')}</span>}
+                            </SignalRow>
+                            {sig.reasoning && (
+                                <SignalReasoning>{sig.reasoning}</SignalReasoning>
+                            )}
+                        </SignalCard>
+                    ))
+                ) : (
+                    <NoAnalysisMsg>
+                        {botData.isRunning
+                            ? 'Analysis running... results will appear here once complete.'
+                            : 'Start the bot to see AI analysis and trading signals here.'}
+                    </NoAnalysisMsg>
+                )}
+            </AnalysisPanel>
+
+            {/* Live Terminal Output */}
+            <TerminalPanel>
+                <TerminalHeader>
+                    <TerminalDot $color="#ff5f57" />
+                    <TerminalDot $color="#ffbd2e" />
+                    <TerminalDot $color="#28c840" />
+                    <h3>Bot Terminal Output</h3>
+                </TerminalHeader>
+                <TerminalBody ref={terminalRef}>
+                    {streamLogs.length === 0 ? (
+                        <TerminalLine $level="INFO">{'> Waiting for bot output... Start the bot to see live logs here.'}</TerminalLine>
+                    ) : (
+                        streamLogs.map((line, i) => {
+                            const level = line.startsWith('[ERROR]') ? 'ERROR'
+                                : line.startsWith('[WARNING]') ? 'WARNING'
+                                : line.startsWith('[INFO]') ? 'INFO'
+                                : undefined;
+                            return <TerminalLine key={i} $level={level}>{line}</TerminalLine>;
+                        })
+                    )}
+                </TerminalBody>
+            </TerminalPanel>
+
             </DashboardContainer>
         </div>
     );

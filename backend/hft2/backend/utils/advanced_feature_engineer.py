@@ -16,8 +16,25 @@ try:
     TALIB_AVAILABLE = True
 except ImportError:
     TALIB_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("TA-Lib not available, using basic feature engineering only")
+
+# Use pandas-ta-classic (in requirements-unified.txt) when TA-Lib is not available
+try:
+    import pandas_ta as pta
+    PANDAS_TA_AVAILABLE = True
+except ImportError:
+    try:
+        import pandas_ta_classic as pta
+        PANDAS_TA_AVAILABLE = True
+    except ImportError:
+        pta = None
+        PANDAS_TA_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+if not TALIB_AVAILABLE:
+    if PANDAS_TA_AVAILABLE:
+        logger.info("TA-Lib not available; using pandas-ta-classic for feature engineering")
+    else:
+        logger.warning("TA-Lib and pandas_ta not available, using minimal pandas-only feature engineering")
 
 # Try to import scipy with fallback
 try:
@@ -66,13 +83,18 @@ class AdvancedFeatureEngineer:
     
     def engineer_all_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Engineer all 100+ features from OHLCV data
+        Engineer all 100+ features from OHLCV data.
+        Uses TA-Lib if available; otherwise pandas-ta-classic; else minimal pandas-only.
         """
         try:
             if len(data) < 200:  # Need sufficient data for complex indicators
                 logger.warning(f"Insufficient data for full feature engineering: {len(data)} rows")
                 return self._engineer_basic_features(data)
-            
+            # When TA-Lib is not installed, use pandas_ta or basic (avoids NameError on talib)
+            if not TALIB_AVAILABLE:
+                if PANDAS_TA_AVAILABLE:
+                    return self._engineer_pandas_ta_features(data)
+                return self._engineer_basic_features(data)
             logger.info(f"Engineering 100+ features from {len(data)} data points")
             
             # Create feature dataframe
@@ -106,7 +128,7 @@ class AdvancedFeatureEngineer:
             features_df = self._add_custom_features(features_df)
             
             # Fill NaN values with forward fill then backward fill
-            features_df = features_df.fillna(method='ffill').fillna(method='bfill')
+            features_df = features_df.ffill().bfill()
             
             logger.info(f"✅ Successfully engineered {len(features_df.columns)} total features")
             return features_df
@@ -490,29 +512,93 @@ class AdvancedFeatureEngineer:
         cmf = pd.Series(mf_volume).rolling(period).sum() / pd.Series(volume).rolling(period).sum()
         return cmf
     
+    def _engineer_pandas_ta_features(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Full feature set using pandas-ta-classic (used when TA-Lib is not available)."""
+        if not PANDAS_TA_AVAILABLE or pta is None:
+            return self._engineer_basic_features(data)
+        try:
+            df = data.copy()
+            close = df["Close"]
+            high = df["High"]
+            low = df["Low"]
+            volume = df["Volume"] if "Volume" in df.columns else pd.Series(1.0, index=df.index)
+            # Moving averages
+            for period in [5, 10, 20, 50]:
+                df[f"sma_{period}"] = pta.sma(close, length=period)
+                df[f"ema_{period}"] = pta.ema(close, length=period)
+            # Momentum
+            df["rsi_14"] = pta.rsi(close, length=14)
+            stoch = pta.stoch(high, low, close)
+            if stoch is not None and isinstance(stoch, pd.DataFrame):
+                df["stoch_k"] = stoch.iloc[:, 0] if len(stoch.columns) >= 1 else np.nan
+                df["stoch_d"] = stoch.iloc[:, 1] if len(stoch.columns) >= 2 else np.nan
+            elif isinstance(stoch, pd.Series):
+                df["stoch_k"] = stoch
+            # MACD
+            macd_df = pta.macd(close, fast=12, slow=26, signal=9)
+            if macd_df is not None and isinstance(macd_df, pd.DataFrame):
+                for c in macd_df.columns:
+                    df[f"macd_{c}"] = macd_df[c]
+            # Bollinger Bands
+            bb = pta.bbands(close, length=20)
+            if bb is not None and isinstance(bb, pd.DataFrame):
+                for c in bb.columns:
+                    df[f"bb_{c}"] = bb[c]
+            # ATR
+            df["atr_14"] = pta.atr(high, low, close, length=14)
+            # OBV
+            df["obv"] = pta.obv(close, volume)
+            df = df.ffill().bfill()
+            logger.info(f"✅ Pandas-TA feature engineering completed: {len(df.columns)} features")
+            return df
+        except Exception as e:
+            logger.warning(f"Pandas-TA feature engineering error: {e}, falling back to basic")
+            return self._engineer_basic_features(data)
+
     def _engineer_basic_features(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Fallback basic feature engineering for insufficient data"""
+        """Fallback basic feature engineering. Uses TA-Lib if available, else pandas_ta, else minimal pandas."""
         try:
             features_df = data.copy()
-            close = data['Close'].values
-            
-            # Basic moving averages
-            features_df['sma_5'] = talib.SMA(close, timeperiod=5)
-            features_df['sma_10'] = talib.SMA(close, timeperiod=10)
-            features_df['sma_20'] = talib.SMA(close, timeperiod=20)
-            
-            # Basic momentum
-            features_df['rsi_14'] = talib.RSI(close, timeperiod=14)
-            
-            # Basic MACD
-            features_df['macd'], features_df['macd_signal'], features_df['macd_hist'] = talib.MACD(close)
-            
-            # Fill NaN values
-            features_df = features_df.fillna(method='ffill').fillna(method='bfill')
-            
+            close = data["Close"]
+            if TALIB_AVAILABLE:
+                close_arr = close.values.astype(np.double)
+                features_df["sma_5"] = talib.SMA(close_arr, timeperiod=5)
+                features_df["sma_10"] = talib.SMA(close_arr, timeperiod=10)
+                features_df["sma_20"] = talib.SMA(close_arr, timeperiod=20)
+                features_df["rsi_14"] = talib.RSI(close_arr, timeperiod=14)
+                features_df["macd"], features_df["macd_signal"], features_df["macd_hist"] = talib.MACD(close_arr)
+            elif PANDAS_TA_AVAILABLE and pta is not None:
+                features_df["sma_5"] = pta.sma(close, length=5)
+                features_df["sma_10"] = pta.sma(close, length=10)
+                features_df["sma_20"] = pta.sma(close, length=20)
+                features_df["rsi_14"] = pta.rsi(close, length=14)
+                macd_df = pta.macd(close, fast=12, slow=26, signal=9)
+                if macd_df is not None and isinstance(macd_df, pd.DataFrame):
+                    cols = list(macd_df.columns)
+                    features_df["macd"] = macd_df[cols[0]] if len(cols) > 0 else np.nan
+                    features_df["macd_signal"] = macd_df[cols[1]] if len(cols) > 1 else np.nan
+                    features_df["macd_hist"] = macd_df[cols[2]] if len(cols) > 2 else np.nan
+                else:
+                    features_df["macd"] = features_df["macd_signal"] = features_df["macd_hist"] = np.nan
+            else:
+                features_df["sma_5"] = close.rolling(5).mean()
+                features_df["sma_10"] = close.rolling(10).mean()
+                features_df["sma_20"] = close.rolling(20).mean()
+                delta = close.diff()
+                gain = delta.where(delta > 0, 0.0)
+                loss = (-delta).where(delta < 0, 0.0)
+                avg_gain = gain.rolling(14).mean()
+                avg_loss = loss.rolling(14).mean()
+                rs = avg_gain / avg_loss.replace(0, np.nan)
+                features_df["rsi_14"] = 100 - (100 / (1 + rs))
+                ema12 = close.ewm(span=12, adjust=False).mean()
+                ema26 = close.ewm(span=26, adjust=False).mean()
+                features_df["macd"] = ema12 - ema26
+                features_df["macd_signal"] = features_df["macd"].ewm(span=9, adjust=False).mean()
+                features_df["macd_hist"] = features_df["macd"] - features_df["macd_signal"]
+            features_df = features_df.ffill().bfill()
             logger.info(f"✅ Basic feature engineering completed: {len(features_df.columns)} features")
             return features_df
-            
         except Exception as e:
             logger.error(f"Error in basic feature engineering: {e}")
             return data

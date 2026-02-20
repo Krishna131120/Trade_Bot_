@@ -719,8 +719,8 @@ def get_stock_data_fyers_or_yf(ticker, period="1d"):
         corrected_ticker = ticker[1:] + '.NS'  # Remove $ and add .NS suffix
         logger.info(f"Attempting to correct ticker to: {corrected_ticker}")
         ticker = corrected_ticker
-    elif '.' not in ticker and not ticker.isdigit():
-        # If no exchange suffix and not a numeric security ID, assume NSE
+    elif '.' not in ticker and not ticker.isdigit() and not ticker.startswith('^'):
+        # If no exchange suffix and not a numeric security ID or index, assume NSE
         ticker = ticker + '.NS'
 
     # Try Fyers first
@@ -1670,25 +1670,9 @@ class TradingExecutor:
         self.max_trade_limit = int(config.get(
             "max_trade_limit", 150) if config else 150)
 
-        # Initialize live executor for database integration if available
+        # live_executor is injected later via set_live_executor() by WebTradingBot._initialize_live_trading()
+        # to avoid a blocking sync_portfolio_with_dhan() call during bot initialization
         self.live_executor = None
-        if self.mode == "live":
-            try:
-                from portfolio_manager import DualPortfolioManager
-                from live_executor import LiveTradingExecutor
-
-                # Initialize the portfolio manager
-                self._portfolio_manager = DualPortfolioManager()
-                self.live_executor = LiveTradingExecutor(
-                    self._portfolio_manager, config)
-                logger.info(
-                    "Live trading database integration initialized successfully")
-            except ImportError as e:
-                logger.warning(
-                    f"Live trading database components not available: {e}")
-            except Exception as e:
-                logger.warning(
-                    f"Failed to initialize live trading database integration: {e}")
 
     def set_live_executor(self, live_executor):
         """Set the live executor for database integration"""
@@ -5116,13 +5100,7 @@ class Stock:
                     "message": f"Unable to fetch sufficient historical data for ML analysis of {ticker}"
                 }
             else:
-                logger.info(
-                    f"Generating adversarial financial data for {ticker}...")
-                adv_history = self.generate_adversarial_financial_data(
-                    extended_history)
-
-                combined_history = pd.concat(
-                    [extended_history, adv_history]).reset_index(drop=True)
+                combined_history = extended_history.reset_index(drop=True)
 
                 logger.info(
                     f"Engineering features for ML pattern recognition...")

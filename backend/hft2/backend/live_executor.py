@@ -85,16 +85,9 @@ class LiveTradingExecutor:
             access_token=dhan_access_token
         )
 
-        # Sync portfolio with Dhan account on initialization
-        try:
-            if not self.sync_portfolio_with_dhan():
-                logger.warning(
-                    "Failed to sync portfolio with Dhan account during initialization, using local database")
-            else:
-                logger.info("Successfully synced portfolio with Dhan account")
-        except Exception as e:
-            logger.warning(
-                f"Failed to sync portfolio with Dhan: {e}, continuing with local database")
+        # Skip sync during initialization to avoid blocking the bot startup.
+        # Sync will happen lazily on first trade or explicit call.
+        logger.info("Skipping portfolio sync during initialization (will sync lazily)")
 
         if not self.enable_sell:
             logger.warning(

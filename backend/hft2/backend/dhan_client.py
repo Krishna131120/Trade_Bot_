@@ -2,9 +2,15 @@
 Load env from backend/hft2/env and fetch live portfolio from Dhan API.
 """
 import os
+import time
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Cache for get_live_portfolio to avoid saturating thread pool with slow Dhan API calls
+_portfolio_cache: Dict = {}
+_portfolio_cache_time: float = 0.0
+_PORTFOLIO_CACHE_TTL: float = 10.0  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +61,7 @@ def _dhan_request(method: str, path: str, token: str, **kwargs: Any) -> Any:
     if kwargs.get("data"):
         req.data = json.dumps(kwargs["data"]).encode("utf-8")
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=5) as r:
             return json.loads(r.read().decode())
     except Exception as e:
         logger.warning("Dhan API %s %s failed: %s", method, path, e)
@@ -114,6 +120,11 @@ def _get_fyers_ltp(symbol: str) -> Optional[float]:
 
 def get_live_portfolio() -> Optional[Dict]:
     """Build portfolio dict for HFT dashboard from Dhan: holdings, cash, totalValue, tradeLog."""
+    global _portfolio_cache, _portfolio_cache_time
+    now = time.time()
+    if _portfolio_cache and (now - _portfolio_cache_time) < _PORTFOLIO_CACHE_TTL:
+        return _portfolio_cache
+
     token = get_dhan_token()
     client_id = get_dhan_client_id()
     logger.info(f"[get_live_portfolio] Token: {bool(token)}, Client ID: {bool(client_id)}")
@@ -200,6 +211,8 @@ def get_live_portfolio() -> Optional[Dict]:
         "tradeLog": [],
     }
     logger.info(f"[get_live_portfolio] Final portfolio: totalValue={result['totalValue']}, holdings={len(holdings)}, symbols={list(holdings.keys())}")
+    _portfolio_cache = result
+    _portfolio_cache_time = time.time()
     return result
 
 
