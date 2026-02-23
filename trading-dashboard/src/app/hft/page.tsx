@@ -43,6 +43,7 @@ export default function HftPage() {
     const [liveStatus, setLiveStatus] = useState<any>(null);
     const [connected, setConnected] = useState(false);
     const [streamLogs, setStreamLogs] = useState<string[]>([]);
+    const [userTickers, setUserTickers] = useState<string[]>([]);
 
     // SSE stream: connect once and keep alive; also do an initial REST load
     useEffect(() => {
@@ -90,6 +91,11 @@ export default function HftPage() {
             setLoading(true);
             await loadDataFromBackend();
             await loadLiveStatus();
+            // Load user's MongoDB watchlist for the analysis panels
+            try {
+                const mongoTickers = await userAPI.getWatchlist();
+                if (mongoTickers.length > 0) setUserTickers(mongoTickers);
+            } catch { /* fallback to botData.config.tickers */ }
             setConnected(true);
             if (botData.chatMessages.length === 0) {
                 setBotData(prev => ({
@@ -471,8 +477,8 @@ export default function HftPage() {
                                     key={id}
                                     onClick={() => setActiveTab(id)}
                                     className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === id
-                                            ? isLight ? 'bg-blue-500 text-white' : 'bg-blue-600 text-white'
-                                            : isLight ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-400 hover:bg-slate-700'
+                                        ? isLight ? 'bg-blue-500 text-white' : 'bg-blue-600 text-white'
+                                        : isLight ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-400 hover:bg-slate-700'
                                         }`}
                                 >
                                     <Icon className="w-4 h-4" /> {label}
@@ -481,7 +487,7 @@ export default function HftPage() {
                         </div>
                         <div className="p-4 md:p-6 min-h-[400px]">
                             {/* Always show components regardless of trading mode or connection status */}
-                            {activeTab === 'dashboard' && <HftDashboard botData={botData} streamLogs={streamLogs} />}
+                            {activeTab === 'dashboard' && <HftDashboard botData={botData} streamLogs={streamLogs} tickers={userTickers.length > 0 ? userTickers : (botData.config.tickers ?? [])} />}
                             {activeTab === 'portfolio' && (
                                 <HftPortfolio
                                     botData={botData}

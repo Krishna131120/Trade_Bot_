@@ -15,6 +15,7 @@ import {
 } from 'chart.js';
 import { Line, Doughnut } from 'react-chartjs-2';
 import type { HftBotData, HftSignal } from '../../types/hft';
+import HftAnalysisPanel from './HftAnalysisPanel';
 import { formatCurrency } from '../../services/hftApiService';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler);
@@ -162,11 +163,11 @@ const SignalCard = styled.div<{ $rec: string }>`
   padding: 14px;
   border-radius: 8px;
   border-left: 4px solid ${p =>
-    p.$rec === 'BUY' ? '#27ae60' :
-    p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
+        p.$rec === 'BUY' ? '#27ae60' :
+            p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
   background: ${p =>
-    p.$rec === 'BUY' ? '#f0fff4' :
-    p.$rec === 'SELL' ? '#fff5f5' : '#fffbf0'};
+        p.$rec === 'BUY' ? '#f0fff4' :
+            p.$rec === 'SELL' ? '#fff5f5' : '#fffbf0'};
   margin-bottom: 12px;
 `;
 
@@ -188,8 +189,8 @@ const SignalBadge = styled.span<{ $rec: string }>`
   font-size: 0.78rem;
   font-weight: 700;
   background: ${p =>
-    p.$rec === 'BUY' ? '#27ae60' :
-    p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
+        p.$rec === 'BUY' ? '#27ae60' :
+            p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
   color: white;
 `;
 
@@ -252,9 +253,9 @@ const TerminalBody = styled.div`
 
 const TerminalLine = styled.div<{ $level?: string }>`
   color: ${p =>
-    p.$level === 'ERROR' ? '#ff7b72' :
-    p.$level === 'WARNING' ? '#e3b341' :
-    p.$level === 'INFO' ? '#79c0ff' : '#8b949e'};
+        p.$level === 'ERROR' ? '#ff7b72' :
+            p.$level === 'WARNING' ? '#e3b341' :
+                p.$level === 'INFO' ? '#79c0ff' : '#8b949e'};
   word-break: break-all;
 `;
 
@@ -297,9 +298,10 @@ type TimePeriod = '1D' | '1M' | '1Y' | 'All';
 interface HftDashboardProps {
     botData: HftBotData;
     streamLogs?: string[];
+    tickers?: string[];    // user's watchlist symbols — one panel per symbol
 }
 
-const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [] }) => {
+const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [], tickers = [] }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('1M');
@@ -623,158 +625,167 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [] })
                 {/* Charts Section */}
                 <ChartsSection>
                     <ChartContainer className="hft-chart">
-                    <ChartHeader>
-                        <h3>Portfolio Performance</h3>
-                        <TimePeriodButtons>
-                            {(['1D', '1M', '1Y', 'All'] as TimePeriod[]).map(period => (
-                                <TimePeriodButton
-                                    key={period}
-                                    $active={timePeriod === period}
-                                    onClick={() => setTimePeriod(period)}
-                                >
-                                    {period}
-                                </TimePeriodButton>
-                            ))}
-                        </TimePeriodButtons>
-                    </ChartHeader>
-                    <PortfolioValueDisplay>
-                        <PortfolioValue>
-                            ₹ {metrics.totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            <PortfolioChange $positive={metrics.unrealizedPnL >= 0}>
-                                {metrics.unrealizedPnL >= 0 ? ' +' : ' '}
-                                {(() => {
-                                    const costBasis = metrics.totalValue - metrics.unrealizedPnL;
-                                    const pct = costBasis !== 0 ? (metrics.unrealizedPnL / costBasis) * 100 : 0;
-                                    return (isNaN(pct) ? 0 : pct).toFixed(2) + '%';
-                                })()}
-                            </PortfolioChange>
-                        </PortfolioValue>
-                        <PortfolioTimestamp>
-                            {getPeriodDescription()} • {new Date().toLocaleDateString('en-IN', {
-                                month: 'short',
-                                day: '2-digit',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                hour12: true
-                            })}
-                        </PortfolioTimestamp>
-                    </PortfolioValueDisplay>
-                    <div style={{ height: '280px' }}>
-                        <Line data={portfolioChartData} options={getChartOptions()} />
-                    </div>
-                </ChartContainer>
-
-                <ChartContainer className="hft-chart">
-                    <h3>Asset Allocation</h3>
-                    <div style={{ height: '300px' }}>
-                        <Doughnut data={allocationChartData} options={doughnutOptions} />
-                    </div>
-                </ChartContainer>
-            </ChartsSection>
-
-            {/* Live Holdings P&L Table */}
-            <AnalysisPanel className="hft-chart">
-                <AnalysisPanelTitle>Live Positions & P&L</AnalysisPanelTitle>
-                {Object.keys(botData.portfolio.holdings || {}).length > 0 ? (
-                    <HoldingsTable>
-                        <Table>
-                            <thead>
-                                <tr>
-                                    <Th>Symbol</Th>
-                                    <Th>Qty</Th>
-                                    <Th>Buy Price</Th>
-                                    <Th>Live Price</Th>
-                                    <Th>Value</Th>
-                                    <Th>P&L</Th>
-                                    <Th>P&L %</Th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {Object.entries(botData.portfolio.holdings).map(([sym, h]) => {
-                                    const qty = h.quantity || 0;
-                                    const buyPrice = h.avgPrice || 0;
-                                    const livePrice = h.currentPrice || buyPrice;
-                                    const value = qty * livePrice;
-                                    const pnl = (livePrice - buyPrice) * qty;
-                                    const pnlPct = buyPrice > 0 ? ((livePrice - buyPrice) / buyPrice) * 100 : 0;
-                                    return (
-                                        <tr key={sym}>
-                                            <Td><strong>{sym.replace('.NS', '').replace('.BO', '')}</strong></Td>
-                                            <Td>{qty}</Td>
-                                            <Td>₹{buyPrice.toFixed(2)}</Td>
-                                            <Td>₹{livePrice.toFixed(2)}</Td>
-                                            <Td>₹{value.toFixed(2)}</Td>
-                                            <PnLCell $positive={pnl >= 0}>
-                                                {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(2)}
-                                            </PnLCell>
-                                            <PnLCell $positive={pnlPct >= 0}>
-                                                {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
-                                            </PnLCell>
-                                        </tr>
-                                    );
+                        <ChartHeader>
+                            <h3>Portfolio Performance</h3>
+                            <TimePeriodButtons>
+                                {(['1D', '1M', '1Y', 'All'] as TimePeriod[]).map(period => (
+                                    <TimePeriodButton
+                                        key={period}
+                                        $active={timePeriod === period}
+                                        onClick={() => setTimePeriod(period)}
+                                    >
+                                        {period}
+                                    </TimePeriodButton>
+                                ))}
+                            </TimePeriodButtons>
+                        </ChartHeader>
+                        <PortfolioValueDisplay>
+                            <PortfolioValue>
+                                ₹ {metrics.totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                <PortfolioChange $positive={metrics.unrealizedPnL >= 0}>
+                                    {metrics.unrealizedPnL >= 0 ? ' +' : ' '}
+                                    {(() => {
+                                        const costBasis = metrics.totalValue - metrics.unrealizedPnL;
+                                        const pct = costBasis !== 0 ? (metrics.unrealizedPnL / costBasis) * 100 : 0;
+                                        return (isNaN(pct) ? 0 : pct).toFixed(2) + '%';
+                                    })()}
+                                </PortfolioChange>
+                            </PortfolioValue>
+                            <PortfolioTimestamp>
+                                {getPeriodDescription()} • {new Date().toLocaleDateString('en-IN', {
+                                    month: 'short',
+                                    day: '2-digit',
+                                    year: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: true
                                 })}
-                            </tbody>
-                        </Table>
-                    </HoldingsTable>
-                ) : (
-                    <NoAnalysisMsg>No open positions. Start the bot to begin trading.</NoAnalysisMsg>
-                )}
-            </AnalysisPanel>
+                            </PortfolioTimestamp>
+                        </PortfolioValueDisplay>
+                        <div style={{ height: '280px' }}>
+                            <Line data={portfolioChartData} options={getChartOptions()} />
+                        </div>
+                    </ChartContainer>
 
-            {/* Analysis & Signals Section */}
-            <AnalysisPanel className="hft-chart">
-                <AnalysisPanelTitle>Bot Analysis & Signals</AnalysisPanelTitle>
-                {botData.analysis && botData.analysis.length > 0 ? (
-                    botData.analysis.map((sig: HftSignal, idx: number) => (
-                        <SignalCard key={idx} $rec={sig.recommendation}>
-                            <SignalHeader>
-                                <SignalSymbol>{sig.symbol}</SignalSymbol>
-                                <SignalBadge $rec={sig.recommendation}>{sig.recommendation}</SignalBadge>
-                            </SignalHeader>
-                            <SignalRow>
-                                <span>Confidence: <strong>{sig.confidence != null ? (sig.confidence * 100).toFixed(1) + '%' : 'N/A'}</strong></span>
-                                {sig.risk_score != null && <span>Risk: <strong>{(sig.risk_score * 100).toFixed(0)}%</strong></span>}
-                                {sig.target_price != null && <span>Target: <strong>₹{sig.target_price}</strong></span>}
-                                {sig.stop_loss != null && <span>Stop Loss: <strong>₹{sig.stop_loss}</strong></span>}
-                                {sig.timestamp && <span style={{ marginLeft: 'auto', color: '#aaa', fontSize: '0.75rem' }}>{new Date(sig.timestamp).toLocaleTimeString('en-IN')}</span>}
-                            </SignalRow>
-                            {sig.reasoning && (
-                                <SignalReasoning>{sig.reasoning}</SignalReasoning>
-                            )}
-                        </SignalCard>
-                    ))
-                ) : (
-                    <NoAnalysisMsg>
-                        {botData.isRunning
-                            ? 'Analysis running... results will appear here once complete.'
-                            : 'Start the bot to see AI analysis and trading signals here.'}
-                    </NoAnalysisMsg>
-                )}
-            </AnalysisPanel>
+                    <ChartContainer className="hft-chart">
+                        <h3>Asset Allocation</h3>
+                        <div style={{ height: '300px' }}>
+                            <Doughnut data={allocationChartData} options={doughnutOptions} />
+                        </div>
+                    </ChartContainer>
+                </ChartsSection>
 
-            {/* Live Terminal Output */}
-            <TerminalPanel>
-                <TerminalHeader>
-                    <TerminalDot $color="#ff5f57" />
-                    <TerminalDot $color="#ffbd2e" />
-                    <TerminalDot $color="#28c840" />
-                    <h3>Bot Terminal Output</h3>
-                </TerminalHeader>
-                <TerminalBody ref={terminalRef}>
-                    {streamLogs.length === 0 ? (
-                        <TerminalLine $level="INFO">{'> Waiting for bot output... Start the bot to see live logs here.'}</TerminalLine>
+                {/* Live Holdings P&L Table */}
+                <AnalysisPanel className="hft-chart">
+                    <AnalysisPanelTitle>Live Positions & P&L</AnalysisPanelTitle>
+                    {Object.keys(botData.portfolio.holdings || {}).length > 0 ? (
+                        <HoldingsTable>
+                            <Table>
+                                <thead>
+                                    <tr>
+                                        <Th>Symbol</Th>
+                                        <Th>Qty</Th>
+                                        <Th>Buy Price</Th>
+                                        <Th>Live Price</Th>
+                                        <Th>Value</Th>
+                                        <Th>P&L</Th>
+                                        <Th>P&L %</Th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {Object.entries(botData.portfolio.holdings).map(([sym, h]) => {
+                                        const qty = h.quantity || 0;
+                                        const buyPrice = h.avgPrice || 0;
+                                        const livePrice = h.currentPrice || buyPrice;
+                                        const value = qty * livePrice;
+                                        const pnl = (livePrice - buyPrice) * qty;
+                                        const pnlPct = buyPrice > 0 ? ((livePrice - buyPrice) / buyPrice) * 100 : 0;
+                                        return (
+                                            <tr key={sym}>
+                                                <Td><strong>{sym.replace('.NS', '').replace('.BO', '')}</strong></Td>
+                                                <Td>{qty}</Td>
+                                                <Td>₹{buyPrice.toFixed(2)}</Td>
+                                                <Td>₹{livePrice.toFixed(2)}</Td>
+                                                <Td>₹{value.toFixed(2)}</Td>
+                                                <PnLCell $positive={pnl >= 0}>
+                                                    {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(2)}
+                                                </PnLCell>
+                                                <PnLCell $positive={pnlPct >= 0}>
+                                                    {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                                                </PnLCell>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </Table>
+                        </HoldingsTable>
                     ) : (
-                        streamLogs.map((line, i) => {
-                            const level = line.startsWith('[ERROR]') ? 'ERROR'
-                                : line.startsWith('[WARNING]') ? 'WARNING'
-                                : line.startsWith('[INFO]') ? 'INFO'
-                                : undefined;
-                            return <TerminalLine key={i} $level={level}>{line}</TerminalLine>;
-                        })
+                        <NoAnalysisMsg>No open positions. Start the bot to begin trading.</NoAnalysisMsg>
                     )}
-                </TerminalBody>
-            </TerminalPanel>
+                </AnalysisPanel>
+
+                {/* Live Streaming Analysis Section — one panel per watchlist symbol */}
+                <AnalysisPanel className="hft-chart">
+                    <AnalysisPanelTitle>Bot Analysis & Signals</AnalysisPanelTitle>
+                    {tickers.length > 0 ? (
+                        tickers.map(sym => (
+                            <HftAnalysisPanel
+                                key={sym}
+                                symbol={sym}
+                                active={botData.isRunning}
+                            />
+                        ))
+                    ) : botData.analysis && botData.analysis.length > 0 ? (
+                        // Fallback: static signals from botData (shown when no tickers prop)
+                        botData.analysis.map((sig: HftSignal, idx: number) => (
+                            <SignalCard key={idx} $rec={sig.recommendation}>
+                                <SignalHeader>
+                                    <SignalSymbol>{sig.symbol}</SignalSymbol>
+                                    <SignalBadge $rec={sig.recommendation}>{sig.recommendation}</SignalBadge>
+                                </SignalHeader>
+                                <SignalRow>
+                                    <span>Confidence: <strong>{sig.confidence != null ? (sig.confidence * 100).toFixed(1) + '%' : 'N/A'}</strong></span>
+                                    {sig.risk_score != null && <span>Risk: <strong>{(sig.risk_score * 100).toFixed(0)}%</strong></span>}
+                                    {sig.target_price != null && <span>Target: <strong>₹{sig.target_price}</strong></span>}
+                                    {sig.stop_loss != null && <span>Stop Loss: <strong>₹{sig.stop_loss}</strong></span>}
+                                    {sig.timestamp && <span style={{ marginLeft: 'auto', color: '#aaa', fontSize: '0.75rem' }}>{new Date(sig.timestamp).toLocaleTimeString('en-IN')}</span>}
+                                </SignalRow>
+                                {sig.reasoning && (
+                                    <SignalReasoning>{sig.reasoning}</SignalReasoning>
+                                )}
+                            </SignalCard>
+                        ))
+                    ) : (
+                        <NoAnalysisMsg>
+                            {botData.isRunning
+                                ? 'Analysis running... signals will appear here once complete.'
+                                : 'Add tickers to your Watchlist, then Start the Bot to see live AI analysis here.'}
+                        </NoAnalysisMsg>
+                    )}
+                </AnalysisPanel>
+
+                {/* Live Terminal Output */}
+                <TerminalPanel>
+                    <TerminalHeader>
+                        <TerminalDot $color="#ff5f57" />
+                        <TerminalDot $color="#ffbd2e" />
+                        <TerminalDot $color="#28c840" />
+                        <h3>Bot Terminal Output</h3>
+                    </TerminalHeader>
+                    <TerminalBody ref={terminalRef}>
+                        {streamLogs.length === 0 ? (
+                            <TerminalLine $level="INFO">{'> Waiting for bot output... Start the bot to see live logs here.'}</TerminalLine>
+                        ) : (
+                            streamLogs.map((line, i) => {
+                                const level = line.startsWith('[ERROR]') ? 'ERROR'
+                                    : line.startsWith('[WARNING]') ? 'WARNING'
+                                        : line.startsWith('[INFO]') ? 'INFO'
+                                            : undefined;
+                                return <TerminalLine key={i} $level={level}>{line}</TerminalLine>;
+                            })
+                        )}
+                    </TerminalBody>
+                </TerminalPanel>
 
             </DashboardContainer>
         </div>

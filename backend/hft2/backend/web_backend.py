@@ -3543,6 +3543,277 @@ async def get_configuration_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/analyze-stream")
+async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
+    """SSE endpoint: run full HFT2 analysis pipeline for a symbol and stream structured events.
+    Events:
+      {type:'progress', step:'...', pct:N}
+      {type:'log', level:'INFO'|'WARNING'|'ERROR', message:'...'}
+      {type:'indicator', name:'RSI', value:..., signal:'bullish'|'bearish'|'neutral'}
+      {type:'result', data:{symbol,recommendation,confidence,reasoning,risk_score,target_price,stop_loss,indicators}}
+      {type:'error', message:'...'}
+      {type:'done'}
+    """
+    import queue as _q_mod
+
+    event_q: "_q_mod.Queue[str]" = _q_mod.Queue(maxsize=2000)
+
+    def _emit(obj: dict):
+        try:
+            event_q.put_nowait(f"data: {json.dumps(obj)}\n\n")
+        except _q_mod.Full:
+            pass
+
+    def _log_emit(level: str, msg: str):
+        _emit({"type": "log", "level": level, "message": msg})
+
+    async def run_analysis():
+        """Run the full pipeline in executor, emitting events at each step."""
+        loop = asyncio.get_event_loop()
+        sym = symbol.strip().upper()
+        indicators: dict = {}
+
+        try:
+            _emit({"type": "progress", "step": "Initializing analysis", "pct": 2})
+            _log_emit("INFO", f"🚀 Starting full HFT2 analysis for {sym}...")
+
+            # ── Step 1: Yahoo Finance historical data ─────────────────
+            _emit({"type": "progress", "step": "Fetching market data", "pct": 10})
+            hist_data = None
+            try:
+                import yfinance as yf
+                def _fetch_hist(s):
+                    t = yf.Ticker(s)
+                    return t.history(period="3mo")
+                hist_data = await asyncio.wait_for(
+                    loop.run_in_executor(None, _fetch_hist, sym), timeout=20.0
+                )
+                if hist_data is not None and not hist_data.empty:
+                    _log_emit("INFO", f"✅ Fetched {len(hist_data)} days historical data for {sym}")
+                else:
+                    _log_emit("WARNING", f"⚠️ No historical data returned for {sym}")
+            except asyncio.TimeoutError:
+                _log_emit("WARNING", "⚠️ Historical data fetch timed out (>20s)")
+            except Exception as e:
+                _log_emit("WARNING", f"⚠️ Historical data error: {e}")
+
+            # ── Step 2: Compute technical indicators ──────────────────
+            _emit({"type": "progress", "step": "Computing technical indicators", "pct": 28})
+            if hist_data is not None and not hist_data.empty:
+                try:
+                    import pandas as pd
+                    closes = hist_data["Close"]
+                    highs  = hist_data["High"]
+                    lows   = hist_data["Low"]
+
+                    # RSI (14)
+                    delta = closes.diff()
+                    gain  = delta.clip(lower=0).rolling(14).mean()
+                    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+                    rs    = gain / loss.replace(0, float('nan'))
+                    rsi_val = float(100 - 100 / (1 + rs.iloc[-1])) if loss.iloc[-1] != 0 else 50.0
+                    rsi_sig = "bullish" if rsi_val < 40 else ("bearish" if rsi_val > 65 else "neutral")
+                    indicators["RSI"] = {"value": round(rsi_val, 2), "signal": rsi_sig}
+                    _emit({"type": "indicator", "name": "RSI (14)", "value": round(rsi_val, 2), "signal": rsi_sig})
+                    _log_emit("INFO", f"📊 RSI(14) = {rsi_val:.2f} → {rsi_sig}")
+
+                    # MACD
+                    ema12 = closes.ewm(span=12, adjust=False).mean()
+                    ema26 = closes.ewm(span=26, adjust=False).mean()
+                    macd_line  = ema12 - ema26
+                    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+                    macd_val   = float(macd_line.iloc[-1])
+                    sig_val    = float(signal_line.iloc[-1])
+                    macd_sig   = "bullish" if macd_val > sig_val else "bearish"
+                    indicators["MACD"] = {"value": round(macd_val, 4), "signal_line": round(sig_val, 4), "signal": macd_sig}
+                    _emit({"type": "indicator", "name": "MACD", "value": round(macd_val, 4), "signal": macd_sig})
+                    _log_emit("INFO", f"📊 MACD = {macd_val:.4f} | Signal = {sig_val:.4f} → {macd_sig}")
+
+                    # EMA 20 vs price
+                    ema20  = float(closes.ewm(span=20, adjust=False).mean().iloc[-1])
+                    price  = float(closes.iloc[-1])
+                    ema_sig = "bullish" if price > ema20 else "bearish"
+                    indicators["EMA20"] = {"value": round(ema20, 2), "price": round(price, 2), "signal": ema_sig}
+                    _emit({"type": "indicator", "name": "EMA (20)", "value": round(ema20, 2), "signal": ema_sig})
+                    _log_emit("INFO", f"📊 EMA20 = ₹{ema20:.2f} | Price = ₹{price:.2f} → {ema_sig}")
+
+                    # Bollinger Bands (20, 2σ)
+                    sma20  = closes.rolling(20).mean()
+                    std20  = closes.rolling(20).std()
+                    upper  = float((sma20 + 2 * std20).iloc[-1])
+                    lower  = float((sma20 - 2 * std20).iloc[-1])
+                    bb_sig = "oversold" if price < lower else ("overbought" if price > upper else "neutral")
+                    indicators["BB"] = {"upper": round(upper, 2), "lower": round(lower, 2), "signal": bb_sig}
+                    _emit({"type": "indicator", "name": "Bollinger Bands", "value": f"₹{lower:.0f}–₹{upper:.0f}", "signal": bb_sig})
+                    _log_emit("INFO", f"📊 BB: ₹{lower:.2f}–₹{upper:.2f} | Price ₹{price:.2f} → {bb_sig}")
+
+                    # Volume trend
+                    avg_vol = float(hist_data["Volume"].rolling(20).mean().iloc[-1])
+                    cur_vol = float(hist_data["Volume"].iloc[-1])
+                    vol_sig = "high" if cur_vol > avg_vol * 1.3 else ("low" if cur_vol < avg_vol * 0.7 else "normal")
+                    indicators["Volume"] = {"current": int(cur_vol), "avg_20d": int(avg_vol), "signal": vol_sig}
+                    _emit({"type": "indicator", "name": "Volume Trend", "value": f"{int(cur_vol):,}", "signal": vol_sig})
+                    _log_emit("INFO", f"📊 Volume = {int(cur_vol):,} vs 20D avg {int(avg_vol):,} → {vol_sig}")
+
+                except Exception as ind_err:
+                    _log_emit("WARNING", f"⚠️ Indicator calculation error: {ind_err}")
+
+            # ── Step 3: News sentiment ────────────────────────────────
+            _emit({"type": "progress", "step": "Analyzing news sentiment", "pct": 48})
+            sentiment_score = 0.0
+            sentiment_label = "neutral"
+            try:
+                from news_sentiment import get_indian_news_sentiment
+                sent = await asyncio.wait_for(
+                    loop.run_in_executor(None, get_indian_news_sentiment, sym),
+                    timeout=30.0
+                )
+                if isinstance(sent, dict):
+                    sentiment_score = float(sent.get("score", 0))
+                    sentiment_label = sent.get("label", "neutral")
+                elif isinstance(sent, (int, float)):
+                    sentiment_score = float(sent)
+                    sentiment_label = "positive" if sentiment_score > 0.1 else ("negative" if sentiment_score < -0.1 else "neutral")
+                _emit({"type": "indicator", "name": "News Sentiment", "value": round(sentiment_score, 3), "signal": sentiment_label})
+                _log_emit("INFO", f"📰 News sentiment for {sym}: {sentiment_label} ({sentiment_score:.3f})")
+            except asyncio.TimeoutError:
+                _log_emit("WARNING", "⚠️ News sentiment timed out")
+            except Exception as sent_err:
+                _log_emit("WARNING", f"⚠️ News sentiment unavailable: {sent_err}")
+
+            # ── Step 4: ML prediction ─────────────────────────────────
+            _emit({"type": "progress", "step": "Running ML prediction", "pct": 65})
+            prediction_result = None
+            if MCP_AVAILABLE:
+                try:
+                    await _ensure_mcp_initialized()
+                    if mcp_trading_agent:
+                        from mcp_server.tools.prediction_tool import PredictionTool
+                        pt = PredictionTool({
+                            "tool_id": "prediction_tool",
+                            "ollama_enabled": True,
+                            "ollama_host": "http://localhost:11434",
+                            "ollama_model": "llama3.1:8b"
+                        })
+                        session_id = str(int(asyncio.get_event_loop().time() * 1_000_000))
+                        res = await asyncio.wait_for(
+                            pt.rank_predictions({"symbols": [sym], "models": ["rl"], "horizon": "day", "include_explanations": True}, session_id),
+                            timeout=60.0
+                        )
+                        if res.status == "SUCCESS":
+                            prediction_result = res.data
+                            _log_emit("INFO", f"✅ ML prediction complete for {sym}")
+                        else:
+                            _log_emit("WARNING", f"⚠️ ML prediction returned: {res.status}")
+                except asyncio.TimeoutError:
+                    _log_emit("WARNING", "⚠️ ML prediction timed out (>60s)")
+                except Exception as pe:
+                    _log_emit("WARNING", f"⚠️ ML prediction failed: {pe}")
+            else:
+                _log_emit("INFO", "ℹ️ MCP not available — skipping ML prediction")
+
+            # ── Step 5: Decision signal ───────────────────────────────
+            _emit({"type": "progress", "step": "Generating trading signal", "pct": 82})
+            recommendation = "HOLD"
+            confidence     = 0.5
+            reasoning      = "Based on technical analysis"
+            risk_score     = 0.5
+            target_price   = None
+            stop_loss_price = None
+
+            analysis_result = _last_bot_analysis.get(sym)
+            if analysis_result:
+                recommendation  = analysis_result.get("recommendation", "HOLD")
+                confidence      = analysis_result.get("confidence", 0.5)
+                reasoning       = analysis_result.get("reasoning", reasoning)
+                risk_score      = analysis_result.get("risk_score", 0.5)
+                target_price    = analysis_result.get("target_price")
+                stop_loss_price = analysis_result.get("stop_loss")
+                _log_emit("INFO", f"✅ Signal from MCP: {recommendation} | Confidence: {confidence:.1%}")
+            elif indicators:
+                # Fallback: derive signal from indicators
+                bull  = sum(1 for v in indicators.values() if isinstance(v, dict) and v.get("signal") in ("bullish", "oversold", "high", "positive"))
+                bear  = sum(1 for v in indicators.values() if isinstance(v, dict) and v.get("signal") in ("bearish", "overbought", "negative"))
+                total = max(bull + bear, 1)
+                confidence = round(max(bull, bear) / total, 2)
+                if bull > bear:
+                    recommendation = "BUY"
+                    reasoning = f"Technical indicators bullish: {bull}/{total} signals favor buying"
+                elif bear > bull:
+                    recommendation = "SELL"
+                    reasoning = f"Technical indicators bearish: {bear}/{total} signals favor selling"
+                else:
+                    reasoning = "Mixed signals — no clear directional bias"
+                if indicators.get("RSI"):
+                    rsi_v = indicators["RSI"]["value"]
+                    if hist_data is not None and not hist_data.empty:
+                        cp = float(hist_data["Close"].iloc[-1])
+                        target_price    = round(cp * 1.03, 2) if recommendation == "BUY" else round(cp * 0.97, 2)
+                        stop_loss_price = round(cp * 0.97, 2) if recommendation == "BUY" else round(cp * 1.03, 2)
+                _log_emit("INFO", f"📈 Derived signal: {recommendation} ({confidence:.1%} confidence)")
+
+            # Emit final structured result
+            result_payload = {
+                "symbol": sym,
+                "recommendation": recommendation,
+                "confidence": confidence,
+                "reasoning": reasoning,
+                "risk_score": risk_score,
+                "target_price": target_price,
+                "stop_loss": stop_loss_price,
+                "sentiment": sentiment_label,
+                "sentiment_score": sentiment_score,
+                "indicators": indicators,
+                "timestamp": datetime.now().isoformat(),
+            }
+            _last_bot_analysis[sym] = {**result_payload, "prediction": prediction_result}
+            _emit({"type": "result", "data": result_payload})
+            _emit({"type": "progress", "step": "Analysis complete", "pct": 100})
+            _log_emit("INFO", f"✅ Analysis complete for {sym}: {recommendation} ({confidence:.1%})")
+
+        except Exception as e:
+            _log_emit("ERROR", f"❌ Analysis pipeline error: {e}")
+            _emit({"type": "error", "message": str(e)})
+        finally:
+            _emit({"type": "done"})
+
+    async def event_generator():
+        # Fire analysis in background so SSE loop can drain the queue
+        analysis_task = asyncio.create_task(run_analysis())
+        try:
+            yield f"data: {json.dumps({'type': 'connected', 'symbol': symbol.strip().upper()})}\n\n"
+            while not analysis_task.done() or not event_q.empty():
+                if await request.is_disconnected():
+                    analysis_task.cancel()
+                    break
+                drained = 0
+                while drained < 30:
+                    try:
+                        yield event_q.get_nowait()
+                        drained += 1
+                    except Exception:
+                        break
+                await asyncio.sleep(0.15)
+            # Drain any remaining events
+            while not event_q.empty():
+                try:
+                    yield event_q.get_nowait()
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection":    "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/stream")
 async def stream_events(request: Request):
     """SSE endpoint: streams live log lines and periodic bot snapshots to the frontend."""
