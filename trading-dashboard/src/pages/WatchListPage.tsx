@@ -21,15 +21,25 @@ const WatchListPage = () => {
 
   // ── Load from DB whenever the logged-in user changes ───────────────────────
   useEffect(() => {
-    if (!user?.username) return;
+    // Clear immediately when user logs out
+    if (!user?.username) {
+      setWatchlist([]);
+      setDbLoaded(false);
+      return;
+    }
+    const username = user.username; // capture for closure safety
     setDbLoaded(false);
     setWatchlist([]);
+    let cancelled = false;
     userAPI.getWatchlist()
       .then(symbols => {
-        setWatchlist(symbols);
-        setDbLoaded(true);
+        if (!cancelled) {
+          setWatchlist(symbols);
+          setDbLoaded(true);
+        }
       })
-      .catch(() => setDbLoaded(true));
+      .catch(() => { if (!cancelled) setDbLoaded(true); });
+    return () => { cancelled = true; }; // cancel if user changes mid-fetch
   }, [user?.username]);
 
   const handleAddToWatchlist = (symbol: string) => {
@@ -42,13 +52,20 @@ const WatchListPage = () => {
 
   // ── Save to DB (debounced) whenever watchlist changes ──────────────────────
   useEffect(() => {
-    if (!dbLoaded) return; // don't save during initial load
+    if (!dbLoaded || !user?.username) return; // don't save until initial load is done and user is known
+    const username = user.username; // lock username into this closure
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
+      // Only save if the logged-in user is still the same one
+      const currentToken = localStorage.getItem('token');
+      if (!currentToken || currentToken === 'no-auth-required') return; // logged out
       userAPI.saveWatchlist(watchlist).catch(() => { });
       if (watchlist.length > 0) loadWatchlistData();
-    }, 500); // debounce 500ms so rapid adds don't spam the server
-  }, [watchlist, dbLoaded]);
+    }, 500);
+    return () => {
+      if (saveTimeout.current) clearTimeout(saveTimeout.current); // cancel on unmount/user change
+    };
+  }, [watchlist, dbLoaded, user?.username]);
 
   const loadWatchlistData = async () => {
     setLoading(true);
