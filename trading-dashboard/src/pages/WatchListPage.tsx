@@ -19,27 +19,32 @@ const WatchListPage = () => {
   const [startingBot, setStartingBot] = useState<string | null>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Load from DB whenever the logged-in user changes ───────────────────────
+  // ── Load from DB whenever the logged-in user changes ──────────────────────
   useEffect(() => {
-    // Clear immediately when user logs out
     if (!user?.username) {
+      console.log('[WatchList] user logged out — clearing watchlist');
       setWatchlist([]);
       setDbLoaded(false);
       return;
     }
-    const username = user.username; // capture for closure safety
+    console.log('[WatchList] loading watchlist for user:', user.username);
     setDbLoaded(false);
     setWatchlist([]);
     let cancelled = false;
     userAPI.getWatchlist()
       .then(symbols => {
+        console.log('[WatchList] API returned symbols for', user.username, ':', symbols);
         if (!cancelled) {
           setWatchlist(symbols);
           setDbLoaded(true);
         }
       })
-      .catch(() => { if (!cancelled) setDbLoaded(true); });
-    return () => { cancelled = true; }; // cancel if user changes mid-fetch
+      .catch((err) => {
+        console.error('[WatchList] getWatchlist FAILED:', err);
+        toast.error('Watchlist load failed: ' + (err?.message || String(err)));
+        if (!cancelled) setDbLoaded(true);
+      });
+    return () => { cancelled = true; };
   }, [user?.username]);
 
   const handleAddToWatchlist = (symbol: string) => {
@@ -52,18 +57,23 @@ const WatchListPage = () => {
 
   // ── Save to DB (debounced) whenever watchlist changes ──────────────────────
   useEffect(() => {
-    if (!dbLoaded || !user?.username) return; // don't save until initial load is done and user is known
-    const username = user.username; // lock username into this closure
+    if (!dbLoaded || !user?.username) return;
+    const username = user.username;
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
-      // Only save if the logged-in user is still the same one
       const currentToken = localStorage.getItem('token');
-      if (!currentToken || currentToken === 'no-auth-required') return; // logged out
-      userAPI.saveWatchlist(watchlist).catch(() => { });
+      if (!currentToken || currentToken === 'no-auth-required') return;
+      console.log('[WatchList] saving watchlist for', username, ':', watchlist);
+      userAPI.saveWatchlist(watchlist)
+        .then(() => console.log('[WatchList] save OK'))
+        .catch((err) => {
+          console.error('[WatchList] saveWatchlist FAILED:', err);
+          toast.error('Watchlist save failed: ' + (err?.message || String(err)));
+        });
       if (watchlist.length > 0) loadWatchlistData();
     }, 500);
     return () => {
-      if (saveTimeout.current) clearTimeout(saveTimeout.current); // cancel on unmount/user change
+      if (saveTimeout.current) clearTimeout(saveTimeout.current);
     };
   }, [watchlist, dbLoaded, user?.username]);
 
