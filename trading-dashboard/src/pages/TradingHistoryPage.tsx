@@ -3,8 +3,12 @@ import Layout from '../components/Layout';
 import { TrendingUp, TrendingDown, AlertCircle } from 'lucide-react';
 import { formatUSDToINR } from '../utils/currencyConverter';
 import { LocalStorageWarning } from '../components/LocalStorageWarning';
+import { useAuth } from '../contexts/AuthContext';
+import { getUserStorage } from '../utils/userStorage';
 
 const TradingHistoryPage = () => {
+  const { user } = useAuth();
+  const userStorage = getUserStorage(user?.username);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,8 +23,8 @@ const TradingHistoryPage = () => {
     setLoading(true);
     setError(null);
     try {
-      // Load from localStorage (backend does not support trading history)
-      const stored = localStorage.getItem('tradingHistory');
+      // Load from user-scoped localStorage (per-user trading history)
+      const stored = userStorage.getItem('tradingHistory');
       if (stored) {
         const allTransactions = JSON.parse(stored);
         const itemsPerPage = 20;
@@ -133,8 +137,8 @@ const TradingHistoryPage = () => {
                   onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                   disabled={currentPage === 1}
                   className={`px-4 py-2 rounded-lg ${currentPage === 1
-                      ? 'bg-slate-700 text-gray-500 cursor-not-allowed'
-                      : 'bg-slate-700 hover:bg-slate-600 text-white'
+                    ? 'bg-slate-700 text-gray-500 cursor-not-allowed'
+                    : 'bg-slate-700 hover:bg-slate-600 text-white'
                     }`}
                 >
                   Previous
@@ -148,8 +152,8 @@ const TradingHistoryPage = () => {
                   onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                   disabled={currentPage === totalPages}
                   className={`px-4 py-2 rounded-lg ${currentPage === totalPages
-                      ? 'bg-slate-700 text-gray-500 cursor-not-allowed'
-                      : 'bg-slate-700 hover:bg-slate-600 text-white'
+                    ? 'bg-slate-700 text-gray-500 cursor-not-allowed'
+                    : 'bg-slate-700 hover:bg-slate-600 text-white'
                     }`}
                 >
                   Next

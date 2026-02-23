@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { stockAPI } from '../services/api';
 import { validateApiResponsePrice, validatePrice, getPriceSourceInfo } from '../utils/priceValidator';
 import { calculatePortfolioMetrics } from '../utils/portfolioCalculations';
+import { useAuth } from './AuthContext';
+import { getUserStorage } from '../utils/userStorage';
 
 // Portfolio Types
 export type PortfolioType = 'seed' | 'tree' | 'sky' | 'scenario';
@@ -40,7 +42,7 @@ interface PortfolioContextType {
   availablePortfolios: PortfolioInfo[];
   isLoading: boolean;
   error: string | null;
-  
+
   // Actions
   selectPortfolio: (portfolioId: PortfolioType) => void;
   addHolding: (holding: Omit<PortfolioHolding, 'currentPrice' | 'value'>) => Promise<void>;
@@ -91,6 +93,8 @@ export const PORTFOLIO_DEFINITIONS: Record<PortfolioType, PortfolioInfo> = {
 };
 
 export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const { user } = useAuth();
+  const userStorage = getUserStorage(user?.username);
   const [selectedPortfolio, setSelectedPortfolio] = useState<PortfolioType>('seed');
   const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
   const [totalValue, setTotalValue] = useState(0);
@@ -107,15 +111,15 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
       await loadPortfolioFromStorage(selectedPortfolio);
       // No automatic refresh - let user explicitly trigger if needed
     };
-    
+
     loadData();
   }, [selectedPortfolio]);
 
   const loadPortfolioFromStorage = async (portfolioId: PortfolioType) => {
     try {
       const key = `portfolio_${portfolioId}_holdings`;
-      const savedHoldings = localStorage.getItem(key);
-      
+      const savedHoldings = userStorage.getItem(key);
+
       // Don't load cached holdings - start with empty portfolio
       console.log('[PORTFOLIO CONTEXT] Starting with empty portfolio, ignoring cached data');
       setHoldings([]);
@@ -123,11 +127,11 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
       setTotalGain(0);
       setTotalGainPercent(0);
       setLastUpdated(new Date());
-      
+
       // Clear any existing cached data
       if (savedHoldings) {
         console.log('[PORTFOLIO CONTEXT] Clearing cached portfolio data for:', portfolioId);
-        localStorage.removeItem(key);
+        userStorage.removeItem(key);
       }
     } catch (err) {
       console.error('Failed to initialize portfolio:', err);
@@ -138,7 +142,7 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
   const savePortfolioToStorage = (portfolioId: PortfolioType, holdingsToSave: PortfolioHolding[]) => {
     try {
       const key = `portfolio_${portfolioId}_holdings`;
-      localStorage.setItem(key, JSON.stringify(holdingsToSave));
+      userStorage.setItem(key, JSON.stringify(holdingsToSave));
     } catch (err) {
       console.error('Failed to save portfolio:', err);
       setError('Failed to save portfolio data');
@@ -148,7 +152,7 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
   const recalculatePortfolioMetrics = (holdingsToCalculate: PortfolioHolding[]) => {
     // Use centralized calculation helper
     const metrics = calculatePortfolioMetrics(holdingsToCalculate);
-    
+
     // Update state with calculated values
     setTotalValue(metrics.totalMarketValue);
     setTotalGain(metrics.totalUnrealizedValue);
@@ -163,7 +167,7 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
   const addHolding = async (holding: Omit<PortfolioHolding, 'currentPrice' | 'value'>) => {
     setIsLoading(true);
     setError(null);
-    
+
     // Validate input data
     if (holding.shares <= 0) {
       throw new Error(`Invalid quantity: ${holding.shares}`);
@@ -171,11 +175,11 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (holding.avgPrice <= 0) {
       throw new Error(`Invalid average price: ${holding.avgPrice}`);
     }
-    
+
     try {
       // Fetch current price from backend using stockAPI
       const data = await stockAPI.predict([holding.symbol], 'intraday');
-      
+
       console.log('[ADD HOLDING] Raw API response:', data);
       let currentPrice = holding.avgPrice;
       if (data.predictions && data.predictions.length > 0) {
@@ -192,12 +196,12 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           }
         }
       }
-      
+
       // CRITICAL VALIDATION: Ensure quantity is not being multiplied by any factor
       if (holding.shares > 100000) { // Arbitrarily high number that shouldn't occur in normal usage
         console.warn(`Warning: Quantity seems unusually high: ${holding.shares} for ${holding.symbol}`);
       }
-      
+
       const newHolding: PortfolioHolding = {
         ...holding,
         currentPrice,
@@ -205,23 +209,23 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
         stopLossPrice: holding.stopLossPrice || null,
         side: holding.side || 'long'
       };
-      
+
       const updatedHoldings = [...holdings, newHolding];
       setHoldings(updatedHoldings);
       savePortfolioToStorage(selectedPortfolio, updatedHoldings);
       recalculatePortfolioMetrics(updatedHoldings);
       setLastUpdated(new Date());
-      
+
     } catch (err) {
       console.error('Failed to add holding:', err);
       setError('Failed to fetch current price. Using average price.');
-      
+
       // Fallback: use average price
       // CRITICAL VALIDATION: Ensure quantity is not being multiplied by any factor
       if (holding.shares > 100000) { // Arbitrarily high number that shouldn't occur in normal usage
         console.warn(`Warning: Quantity seems unusually high: ${holding.shares} for ${holding.symbol}`);
       }
-      
+
       const newHolding: PortfolioHolding = {
         ...holding,
         currentPrice: holding.avgPrice,
@@ -229,7 +233,7 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
         stopLossPrice: holding.stopLossPrice || null,
         side: holding.side || 'long'
       };
-      
+
       const updatedHoldings = [...holdings, newHolding];
       setHoldings(updatedHoldings);
       savePortfolioToStorage(selectedPortfolio, updatedHoldings);
@@ -252,13 +256,13 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const updateHoldingPrice = (symbol: string, newPrice: number) => {
-    const updatedHoldings = holdings.map(h => 
-      h.symbol === symbol 
-        ? { 
-            ...h, 
-            currentPrice: newPrice, 
-            value: h.shares * newPrice
-          } 
+    const updatedHoldings = holdings.map(h =>
+      h.symbol === symbol
+        ? {
+          ...h,
+          currentPrice: newPrice,
+          value: h.shares * newPrice
+        }
         : h
     );
     setHoldings(updatedHoldings);
@@ -273,11 +277,11 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (now - lastRefreshTime < 1000) {
       return;
     }
-    
+
     setLastRefreshTime(now);
     setIsLoading(true);
     setError(null);
-    
+
     try {
       // Refresh all holdings with current prices
       const symbols = holdings.map(h => h.symbol);
@@ -288,16 +292,16 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
         }, 300);
         return;
       }
-      
+
       // Only fetch predictions if explicitly requested
       if (!shouldPredict) {
         console.log('[PORTFOLIO REFRESH] Skipping prediction fetch - not requested');
         setIsLoading(false);
         return;
       }
-      
+
       const data = await stockAPI.predict(symbols, 'intraday');
-      
+
       if (data.predictions) {
         console.log('[PORTFOLIO REFRESH] Raw API response:', data);
         const updatedHoldings = holdings.map(holding => {
@@ -307,12 +311,12 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
             try {
               const newPrice = validateApiResponsePrice(prediction, holding.symbol);
               console.log(`[PORTFOLIO REFRESH] ${holding.symbol} price updated from ${holding.currentPrice} to ${newPrice} (${getPriceSourceInfo(newPrice, holding.symbol)})`);
-              
+
               // CRITICAL VALIDATION: Ensure quantity is not being multiplied by any factor
               if (holding.shares > 100000) { // Arbitrarily high number that shouldn't occur in normal usage
                 console.warn(`Warning: Quantity seems unusually high: ${holding.shares} for ${holding.symbol}`);
               }
-              
+
               return {
                 ...holding,
                 currentPrice: newPrice,
@@ -329,12 +333,12 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
           console.log(`[PORTFOLIO REFRESH] ${holding.symbol} no prediction found, keeping ${holding.currentPrice}`);
           return holding;
         });
-        
+
         setHoldings(updatedHoldings);
         savePortfolioToStorage(selectedPortfolio, updatedHoldings);
         recalculatePortfolioMetrics(updatedHoldings);
       }
-      
+
       setLastUpdated(new Date());
     } catch (err) {
       console.error('Failed to refresh portfolio:', err);
@@ -356,13 +360,13 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
     savePortfolioToStorage(selectedPortfolio, []);
   };
 
-  // Utility function to clear all portfolio data from localStorage
+  // Utility function to clear all portfolio data from user-scoped localStorage
   const clearAllPortfolioData = () => {
     const portfolioTypes: PortfolioType[] = ['seed', 'tree', 'sky', 'scenario'];
     portfolioTypes.forEach(type => {
       const key = `portfolio_${type}_holdings`;
-      localStorage.removeItem(key);
-      console.log(`[PORTFOLIO CONTEXT] Cleared localStorage for: ${key}`);
+      userStorage.removeItem(key);
+      console.log(`[PORTFOLIO CONTEXT] Cleared user-scoped storage for: ${key}`);
     });
     // Also clear holdings state
     setHoldings([]);
@@ -373,8 +377,8 @@ export const PortfolioProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const updateHoldingStopLoss = (symbol: string, stopLossPrice: number | null) => {
-    const updatedHoldings = holdings.map(h => 
-      h.symbol === symbol 
+    const updatedHoldings = holdings.map(h =>
+      h.symbol === symbol
         ? { ...h, stopLossPrice: stopLossPrice || null }
         : h
     );

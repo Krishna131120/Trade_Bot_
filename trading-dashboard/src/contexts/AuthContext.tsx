@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { authAPI } from '../services/api';
 import { config } from '../config';
+import { getUserStorage } from '../utils/userStorage';
 
 interface User {
   username: string;
@@ -150,7 +151,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
-    // Clear user state and localStorage regardless of auth status
+    // Clear this user's scoped data from localStorage before removing auth token
+    if (user?.username) {
+      const userStorage = getUserStorage(user.username);
+      userStorage.clearUserData();
+    }
+    // Clear user state and auth keys from localStorage
     setUser(null);
     localStorage.removeItem('token');
     localStorage.removeItem('username');

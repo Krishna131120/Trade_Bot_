@@ -6,10 +6,15 @@ import { formatUSDToINR } from '../utils/currencyConverter';
 import SymbolAutocomplete from '../components/SymbolAutocomplete';
 import { hftApiService } from '../services/hftApiService';
 import toast from 'react-hot-toast';
+import { useAuth } from '../contexts/AuthContext';
+import { getUserStorage } from '../utils/userStorage';
 
 const WatchListPage = () => {
+  const { user } = useAuth();
+  const userStorage = getUserStorage(user?.username);
+
   const [watchlist, setWatchlist] = useState<string[]>(() => {
-    const saved = localStorage.getItem('watchlist');
+    const saved = userStorage.getItem('watchlist');
     return saved ? JSON.parse(saved) : []; // No mock data - empty by default
   });
   const [predictions, setPredictions] = useState<any[]>([]);
@@ -26,7 +31,7 @@ const WatchListPage = () => {
   };
 
   useEffect(() => {
-    localStorage.setItem('watchlist', JSON.stringify(watchlist));
+    userStorage.setItem('watchlist', JSON.stringify(watchlist));
     if (watchlist.length > 0) {
       loadWatchlistData();
     }
@@ -64,9 +69,9 @@ const WatchListPage = () => {
     try {
       setStartingBot(symbol);
       toast.loading(`Starting bot for ${symbol}...`, { id: `start-bot-${symbol}` });
-      
+
       const result = await hftApiService.startBotWithSymbol(symbol);
-      
+
       if (result.status === 'pending') {
         toast.success(`Bot initialization started for ${symbol}. Please wait...`, { id: `start-bot-${symbol}`, duration: 3000 });
         // Navigate to BOT page to see progress

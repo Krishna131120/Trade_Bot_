@@ -1,4 +1,5 @@
 import { PriceAlert, PredictionAlert, AppNotification } from '../types/alerts';
+import { getUserStorage, UserStorage } from '../utils/userStorage';
 
 const STORAGE_KEYS = {
   PRICE_ALERTS: 'price_alerts',
@@ -23,11 +24,30 @@ const defaultSettings: NotificationSettings = {
   systemNotifications: true,
 };
 
+/**
+ * Gets the current user's username from localStorage.
+ * This is a fallback for services that can't use React hooks.
+ * The AuthContext always writes the username to localStorage on login.
+ */
+function getCurrentUsername(): string | null {
+  try {
+    return localStorage.getItem('username');
+  } catch {
+    return null;
+  }
+}
+
+/** Get the user-scoped storage for the currently logged-in user */
+function getStorage(): UserStorage {
+  return getUserStorage(getCurrentUsername());
+}
+
 // Price Alerts
 export const priceAlertsService = {
   getAll: (): PriceAlert[] => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.PRICE_ALERTS);
+      const storage = getStorage();
+      const stored = storage.getItem(STORAGE_KEYS.PRICE_ALERTS);
       if (!stored) return [];
       const alerts = JSON.parse(stored);
       return alerts.map((a: any) => ({
@@ -50,7 +70,7 @@ export const priceAlertsService = {
       notificationSent: false,
     };
     alerts.push(newAlert);
-    localStorage.setItem(STORAGE_KEYS.PRICE_ALERTS, JSON.stringify(alerts));
+    getStorage().setItem(STORAGE_KEYS.PRICE_ALERTS, JSON.stringify(alerts));
     return newAlert;
   },
 
@@ -59,14 +79,14 @@ export const priceAlertsService = {
     const index = alerts.findIndex(a => a.id === id);
     if (index === -1) return null;
     alerts[index] = { ...alerts[index], ...updates };
-    localStorage.setItem(STORAGE_KEYS.PRICE_ALERTS, JSON.stringify(alerts));
+    getStorage().setItem(STORAGE_KEYS.PRICE_ALERTS, JSON.stringify(alerts));
     return alerts[index];
   },
 
   delete: (id: string): boolean => {
     const alerts = priceAlertsService.getAll();
     const filtered = alerts.filter(a => a.id !== id);
-    localStorage.setItem(STORAGE_KEYS.PRICE_ALERTS, JSON.stringify(filtered));
+    getStorage().setItem(STORAGE_KEYS.PRICE_ALERTS, JSON.stringify(filtered));
     return filtered.length < alerts.length;
   },
 
@@ -108,7 +128,8 @@ export const priceAlertsService = {
 export const predictionAlertsService = {
   getAll: (): PredictionAlert[] => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.PREDICTION_ALERTS);
+      const storage = getStorage();
+      const stored = storage.getItem(STORAGE_KEYS.PREDICTION_ALERTS);
       if (!stored) return [];
       const alerts = JSON.parse(stored);
       return alerts.map((a: any) => ({
@@ -130,7 +151,7 @@ export const predictionAlertsService = {
       triggeredAt: undefined,
     };
     alerts.push(newAlert);
-    localStorage.setItem(STORAGE_KEYS.PREDICTION_ALERTS, JSON.stringify(alerts));
+    getStorage().setItem(STORAGE_KEYS.PREDICTION_ALERTS, JSON.stringify(alerts));
     return newAlert;
   },
 
@@ -139,14 +160,14 @@ export const predictionAlertsService = {
     const index = alerts.findIndex(a => a.id === id);
     if (index === -1) return null;
     alerts[index] = { ...alerts[index], ...updates };
-    localStorage.setItem(STORAGE_KEYS.PREDICTION_ALERTS, JSON.stringify(alerts));
+    getStorage().setItem(STORAGE_KEYS.PREDICTION_ALERTS, JSON.stringify(alerts));
     return alerts[index];
   },
 
   delete: (id: string): boolean => {
     const alerts = predictionAlertsService.getAll();
     const filtered = alerts.filter(a => a.id !== id);
-    localStorage.setItem(STORAGE_KEYS.PREDICTION_ALERTS, JSON.stringify(filtered));
+    getStorage().setItem(STORAGE_KEYS.PREDICTION_ALERTS, JSON.stringify(filtered));
     return filtered.length < alerts.length;
   },
 
@@ -173,7 +194,8 @@ export const predictionAlertsService = {
 export const notificationsService = {
   getAll: (): AppNotification[] => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS);
+      const storage = getStorage();
+      const stored = storage.getItem(STORAGE_KEYS.NOTIFICATIONS);
       if (!stored) return [];
       const notifications = JSON.parse(stored);
       return notifications.map((n: any) => ({
@@ -196,8 +218,8 @@ export const notificationsService = {
     notifications.unshift(newNotification); // Add to beginning
     // Keep only last 100 notifications
     const limited = notifications.slice(0, 100);
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(limited));
-    
+    getStorage().setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(limited));
+
     // Send browser notification if enabled
     const settings = notificationSettingsService.get();
     if (settings.browserNotifications && 'Notification' in window && Notification.permission === 'granted') {
@@ -207,7 +229,7 @@ export const notificationsService = {
         tag: newNotification.id,
       });
     }
-    
+
     return newNotification;
   },
 
@@ -216,25 +238,25 @@ export const notificationsService = {
     const index = notifications.findIndex(n => n.id === id);
     if (index === -1) return false;
     notifications[index].read = true;
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
+    getStorage().setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
     return true;
   },
 
   markAllAsRead: (): void => {
     const notifications = notificationsService.getAll();
     notifications.forEach(n => n.read = true);
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
+    getStorage().setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
   },
 
   delete: (id: string): boolean => {
     const notifications = notificationsService.getAll();
     const filtered = notifications.filter(n => n.id !== id);
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(filtered));
+    getStorage().setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(filtered));
     return filtered.length < notifications.length;
   },
 
   clearAll: (): void => {
-    localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
+    getStorage().removeItem(STORAGE_KEYS.NOTIFICATIONS);
   },
 
   getUnreadCount: (): number => {
@@ -246,7 +268,8 @@ export const notificationsService = {
 export const notificationSettingsService = {
   get: (): NotificationSettings => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.NOTIFICATION_SETTINGS);
+      const storage = getStorage();
+      const stored = storage.getItem(STORAGE_KEYS.NOTIFICATION_SETTINGS);
       if (!stored) return defaultSettings;
       return { ...defaultSettings, ...JSON.parse(stored) };
     } catch {
@@ -257,13 +280,13 @@ export const notificationSettingsService = {
   update: (settings: Partial<NotificationSettings>): NotificationSettings => {
     const current = notificationSettingsService.get();
     const updated = { ...current, ...settings };
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SETTINGS, JSON.stringify(updated));
-    
+    getStorage().setItem(STORAGE_KEYS.NOTIFICATION_SETTINGS, JSON.stringify(updated));
+
     // Request browser notification permission if enabling
     if (updated.browserNotifications && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
-    
+
     return updated;
   },
 };
@@ -273,16 +296,15 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
   if (!('Notification' in window)) {
     return false;
   }
-  
+
   if (Notification.permission === 'granted') {
     return true;
   }
-  
+
   if (Notification.permission === 'default') {
     const permission = await Notification.requestPermission();
     return permission === 'granted';
   }
-  
+
   return false;
 };
-

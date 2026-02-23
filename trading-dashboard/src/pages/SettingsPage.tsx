@@ -7,6 +7,8 @@ import { useHealth } from '../contexts/HealthContext';
 import { notificationSettingsService, NotificationSettings } from '../services/alertsService';
 import { config } from '../config';
 import { LocalStorageWarning } from '../components/LocalStorageWarning';
+import { useAuth } from '../contexts/AuthContext';
+import { getUserStorage } from '../utils/userStorage';
 
 interface UserPreferences {
   refreshInterval: number; // in seconds
@@ -25,6 +27,8 @@ const defaultPreferences: UserPreferences = {
 };
 
 const SettingsPage = () => {
+  const { user } = useAuth();
+  const userStorage = getUserStorage(user?.username);
   const { theme, setTheme } = useTheme();
   const { settings: notificationSettings, updateSettings: updateNotificationSettings } = useNotifications();
   const { health, checkHealth, isPolling } = useHealth();
@@ -41,8 +45,8 @@ const SettingsPage = () => {
     setLoading(true);
     setError(null);
     try {
-      // Load settings from localStorage (backend does not support user settings)
-      const stored = localStorage.getItem('user_preferences');
+      // Load settings from user-scoped localStorage
+      const stored = userStorage.getItem('user_preferences');
       if (stored) {
         setPreferences({ ...defaultPreferences, ...JSON.parse(stored) });
       }
@@ -56,8 +60,8 @@ const SettingsPage = () => {
 
   const savePreferences = async () => {
     try {
-      // Save preferences to localStorage (backend does not support user settings)
-      localStorage.setItem('user_preferences', JSON.stringify(preferences));
+      // Save preferences to user-scoped localStorage
+      userStorage.setItem('user_preferences', JSON.stringify(preferences));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (error: any) {
@@ -67,19 +71,20 @@ const SettingsPage = () => {
 
   const clearAllData = async () => {
     if (confirm('Are you sure you want to clear all data? This will remove your portfolio, watchlist, alerts, and preferences.')) {
-      localStorage.clear();
+      // Only clear THIS user's data, not other users'
+      userStorage.clearUserData();
       window.location.reload();
     }
   };
 
   const exportData = async () => {
-    // Export from localStorage (backend does not support data export)
+    // Export from user-scoped localStorage
     const data = {
       preferences,
-      portfolio: localStorage.getItem('portfolio_holdings'),
-      watchlist: localStorage.getItem('watchlist'),
-      alerts: localStorage.getItem('alerts'),
-      tradingHistory: localStorage.getItem('tradingHistory'),
+      portfolio: userStorage.getItem('portfolio_holdings'),
+      watchlist: userStorage.getItem('watchlist'),
+      alerts: userStorage.getItem('alerts'),
+      tradingHistory: userStorage.getItem('tradingHistory'),
       timestamp: new Date().toISOString(),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -118,7 +123,7 @@ const SettingsPage = () => {
           <div className="bg-red-900/30 border border-red-700 rounded-lg p-4 text-red-200">
             <p className="font-semibold mb-1">Error Loading Settings</p>
             <p className="text-sm">{error}</p>
-            <button 
+            <button
               onClick={loadSettingsFromBackend}
               className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm"
             >
@@ -139,33 +144,30 @@ const SettingsPage = () => {
               <div className="flex gap-2">
                 <button
                   onClick={() => setTheme('light')}
-                  className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
-                    theme === 'light'
+                  className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${theme === 'light'
                       ? 'border-blue-500 bg-blue-500/20 text-white'
                       : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
-                  }`}
+                    }`}
                 >
                   <Sun className="w-5 h-5 mx-auto mb-1" />
                   <span className="text-sm font-medium">Light</span>
                 </button>
                 <button
                   onClick={() => setTheme('dark')}
-                  className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
-                    theme === 'dark'
+                  className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${theme === 'dark'
                       ? 'border-blue-500 bg-blue-500/20 text-white'
                       : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
-                  }`}
+                    }`}
                 >
                   <Moon className="w-5 h-5 mx-auto mb-1" />
                   <span className="text-sm font-medium">Dark</span>
                 </button>
                 <button
                   onClick={() => setTheme('space')}
-                  className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${
-                    theme === 'space'
+                  className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${theme === 'space'
                       ? 'border-blue-500 bg-blue-500/20 text-white'
                       : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
-                  }`}
+                    }`}
                 >
                   <Sparkles className="w-5 h-5 mx-auto mb-1" />
                   <span className="text-sm font-medium">Space</span>
@@ -306,19 +308,16 @@ const SettingsPage = () => {
             System Health
           </h2>
           <div className="space-y-4">
-            <div className={`p-4 rounded-lg border ${
-              health.healthy 
-                ? 'bg-green-500/10 border-green-500/30' 
+            <div className={`p-4 rounded-lg border ${health.healthy
+                ? 'bg-green-500/10 border-green-500/30'
                 : 'bg-red-500/10 border-red-500/30'
-            }`}>
+              }`}>
               <div className="flex items-center gap-3">
-                <div className={`w-3 h-3 rounded-full ${
-                  health.healthy ? 'bg-green-400 animate-pulse' : 'bg-red-400'
-                }`}></div>
+                <div className={`w-3 h-3 rounded-full ${health.healthy ? 'bg-green-400 animate-pulse' : 'bg-red-400'
+                  }`}></div>
                 <div>
-                  <p className={`font-semibold ${
-                    health.healthy ? 'text-green-400' : 'text-red-400'
-                  }`}>
+                  <p className={`font-semibold ${health.healthy ? 'text-green-400' : 'text-red-400'
+                    }`}>
                     System {health.healthy ? 'Healthy' : 'Offline'}
                   </p>
                   <p className="text-gray-400 text-sm mt-1">
@@ -335,7 +334,7 @@ const SettingsPage = () => {
                 </button>
               </div>
             </div>
-            
+
             {health.healthy && (health as any).system && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-slate-700/50 p-3 rounded-lg">
