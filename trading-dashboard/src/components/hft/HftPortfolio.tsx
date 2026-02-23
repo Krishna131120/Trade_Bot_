@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import styled from 'styled-components';
 import toast from 'react-hot-toast';
 import type { HftBotData, HftTrade } from '../../types/hft';
 import { formatCurrency, hftApiService } from '../../services/hftApiService';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { userAPI } from '../../services/api';
 
 const PortfolioContainer = styled.div`
   display: flex;
@@ -443,6 +445,7 @@ type OrderSide = 'BUY' | 'SELL';
 const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRemoveTicker }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
+    const { user } = useAuth();
 
     const [subTab, setSubTab] = useState<'holdings' | 'activity' | 'watchlist'>('holdings');
     const [newTicker, setNewTicker] = useState('');
@@ -452,6 +455,32 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
     const [orderModal, setOrderModal] = useState<{ open: boolean; symbol: string; side: OrderSide; quantity: string; stopLossPct: string }>({
         open: false, symbol: '', side: 'BUY', quantity: '', stopLossPct: ''
     });
+
+    // ── Per-user watchlist – stored in MongoDB, isolated by JWT ─────────────────
+    const [userWatchlist, setUserWatchlist] = useState<string[]>([]);
+    const [watchlistLoaded, setWatchlistLoaded] = useState(false);
+    const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        if (!user?.username) { setUserWatchlist([]); setWatchlistLoaded(false); return; }
+        let cancelled = false;
+        setWatchlistLoaded(false);
+        userAPI.getWatchlist()
+            .then(symbols => { if (!cancelled) { setUserWatchlist(symbols); setWatchlistLoaded(true); } })
+            .catch(() => { if (!cancelled) setWatchlistLoaded(true); });
+        return () => { cancelled = true; };
+    }, [user?.username]);
+
+    // Debounced save to MongoDB whenever userWatchlist changes
+    useEffect(() => {
+        if (!watchlistLoaded || !user?.username) return;
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(() => {
+            userAPI.saveWatchlist(userWatchlist).catch(() => { });
+        }, 600);
+        return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+    }, [userWatchlist, watchlistLoaded, user?.username]);
+    // ───────────────────────────────────────────────────────────────────────
 
     useEffect(() => {
         const fetchTradeHistory = async () => {
@@ -488,20 +517,22 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
     };
 
     const handleAddTicker = async () => {
-        if (!newTicker.trim()) {
-            alert('Please enter a ticker symbol');
-            return;
-        }
-        if (botData.config.tickers.includes(newTicker.toUpperCase())) {
-            alert('Ticker already in watchlist');
-            return;
-        }
+        if (!newTicker.trim()) { alert('Please enter a ticker symbol'); return; }
+        const normalized = newTicker.trim().toUpperCase();
+        if (userWatchlist.includes(normalized)) { alert('Ticker already in watchlist'); return; }
         setLoading(true);
         try {
-            await onAddTicker(newTicker.toUpperCase());
+            // 1. Update local user watchlist in MongoDB
+            setUserWatchlist(prev => [...prev, normalized]);
+            // 2. Also push to bot's running config (best-effort)
+            if (onAddTicker) {
+                try { await onAddTicker(normalized); } catch { /* ignore bot errors */ }
+            }
             setNewTicker('');
+            toast.success(`${normalized} added to your watchlist`);
         } catch (error) {
             console.error('Error adding ticker:', error);
+            toast.error('Failed to add ticker');
         } finally {
             setLoading(false);
         }
@@ -510,7 +541,13 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
     const handleRemoveTicker = async (ticker: string) => {
         setLoading(true);
         try {
-            await onRemoveTicker(ticker);
+            // 1. Remove from user watchlist in MongoDB
+            setUserWatchlist(prev => prev.filter(t => t !== ticker));
+            // 2. Also remove from bot's running config (best-effort)
+            if (onRemoveTicker) {
+                try { await onRemoveTicker(ticker); } catch { /* ignore bot errors */ }
+            }
+            toast.success(`${ticker} removed from your watchlist`);
         } catch (error) {
             console.error('Error removing ticker:', error);
         } finally {
@@ -712,14 +749,22 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
 
                             <div>
                                 <h4 style={{ marginBottom: 10 }}>Current Watchlist:</h4>
-                                <WatchlistGrid>
-                                    {botData.config.tickers.map(ticker => (
-                                        <WatchlistItem key={ticker} $isLight={isLight}>
-                                            {ticker}
-                                            <RemoveButton onClick={() => handleRemoveTicker(ticker)}>×</RemoveButton>
-                                        </WatchlistItem>
-                                    ))}
-                                </WatchlistGrid>
+                                {!watchlistLoaded ? (
+                                    <div style={{ color: '#94a3b8', padding: '10px 0' }}>Loading your watchlist...</div>
+                                ) : (
+                                    <WatchlistGrid>
+                                        {userWatchlist.length === 0 ? (
+                                            <div style={{ color: '#94a3b8', fontStyle: 'italic', gridColumn: '1/-1' }}>Your watchlist is empty. Add a ticker above.</div>
+                                        ) : (
+                                            userWatchlist.map(ticker => (
+                                                <WatchlistItem key={ticker} $isLight={isLight}>
+                                                    {ticker}
+                                                    <RemoveButton onClick={() => handleRemoveTicker(ticker)}>×</RemoveButton>
+                                                </WatchlistItem>
+                                            ))
+                                        )}
+                                    </WatchlistGrid>
+                                )}
                             </div>
                         </Section>
                     </TabPanel>
