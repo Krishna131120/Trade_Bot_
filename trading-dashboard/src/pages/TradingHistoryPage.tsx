@@ -8,7 +8,6 @@ import { getUserStorage } from '../utils/userStorage';
 
 const TradingHistoryPage = () => {
   const { user } = useAuth();
-  const userStorage = getUserStorage(user?.username);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -17,14 +16,20 @@ const TradingHistoryPage = () => {
 
   useEffect(() => {
     loadTradingHistory();
-  }, [currentPage]);
+  }, [currentPage, user?.username]);
 
   const loadTradingHistory = async () => {
     setLoading(true);
     setError(null);
     try {
       // Load from user-scoped localStorage (per-user trading history)
-      const stored = userStorage.getItem('tradingHistory');
+      if (!user?.username) {
+        setTransactions([]);
+        setTotalPages(1);
+        return;
+      }
+      const storage = getUserStorage(user.username);
+      const stored = storage.getItem('tradingHistory');
       if (stored) {
         const allTransactions = JSON.parse(stored);
         const itemsPerPage = 20;

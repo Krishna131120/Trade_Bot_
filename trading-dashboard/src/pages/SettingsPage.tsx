@@ -28,7 +28,6 @@ const defaultPreferences: UserPreferences = {
 
 const SettingsPage = () => {
   const { user } = useAuth();
-  const userStorage = getUserStorage(user?.username);
   const { theme, setTheme } = useTheme();
   const { settings: notificationSettings, updateSettings: updateNotificationSettings } = useNotifications();
   const { health, checkHealth, isPolling } = useHealth();
@@ -37,18 +36,26 @@ const SettingsPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Re-load settings whenever the logged-in user changes
   useEffect(() => {
     loadSettingsFromBackend();
-  }, []);
+  }, [user?.username]);
 
   const loadSettingsFromBackend = async () => {
     setLoading(true);
     setError(null);
     try {
+      if (!user?.username) {
+        setPreferences(defaultPreferences);
+        return;
+      }
       // Load settings from user-scoped localStorage
-      const stored = userStorage.getItem('user_preferences');
+      const storage = getUserStorage(user.username);
+      const stored = storage.getItem('user_preferences');
       if (stored) {
         setPreferences({ ...defaultPreferences, ...JSON.parse(stored) });
+      } else {
+        setPreferences(defaultPreferences);
       }
     } catch (error: any) {
       setError('Failed to load settings from local storage.');
@@ -60,8 +67,10 @@ const SettingsPage = () => {
 
   const savePreferences = async () => {
     try {
+      if (!user?.username) return;
       // Save preferences to user-scoped localStorage
-      userStorage.setItem('user_preferences', JSON.stringify(preferences));
+      const storage = getUserStorage(user.username);
+      storage.setItem('user_preferences', JSON.stringify(preferences));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (error: any) {
@@ -72,19 +81,22 @@ const SettingsPage = () => {
   const clearAllData = async () => {
     if (confirm('Are you sure you want to clear all data? This will remove your portfolio, watchlist, alerts, and preferences.')) {
       // Only clear THIS user's data, not other users'
-      userStorage.clearUserData();
+      if (user?.username) {
+        getUserStorage(user.username).clearUserData();
+      }
       window.location.reload();
     }
   };
 
   const exportData = async () => {
     // Export from user-scoped localStorage
+    const storage = user?.username ? getUserStorage(user.username) : getUserStorage(null);
     const data = {
       preferences,
-      portfolio: userStorage.getItem('portfolio_holdings'),
-      watchlist: userStorage.getItem('watchlist'),
-      alerts: userStorage.getItem('alerts'),
-      tradingHistory: userStorage.getItem('tradingHistory'),
+      portfolio: storage.getItem('portfolio_holdings'),
+      watchlist: storage.getItem('watchlist'),
+      alerts: storage.getItem('alerts'),
+      tradingHistory: storage.getItem('tradingHistory'),
       timestamp: new Date().toISOString(),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -145,8 +157,8 @@ const SettingsPage = () => {
                 <button
                   onClick={() => setTheme('light')}
                   className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${theme === 'light'
-                      ? 'border-blue-500 bg-blue-500/20 text-white'
-                      : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
+                    ? 'border-blue-500 bg-blue-500/20 text-white'
+                    : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
                     }`}
                 >
                   <Sun className="w-5 h-5 mx-auto mb-1" />
@@ -155,8 +167,8 @@ const SettingsPage = () => {
                 <button
                   onClick={() => setTheme('dark')}
                   className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${theme === 'dark'
-                      ? 'border-blue-500 bg-blue-500/20 text-white'
-                      : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
+                    ? 'border-blue-500 bg-blue-500/20 text-white'
+                    : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
                     }`}
                 >
                   <Moon className="w-5 h-5 mx-auto mb-1" />
@@ -165,8 +177,8 @@ const SettingsPage = () => {
                 <button
                   onClick={() => setTheme('space')}
                   className={`flex-1 px-4 py-3 rounded-lg border-2 transition-all ${theme === 'space'
-                      ? 'border-blue-500 bg-blue-500/20 text-white'
-                      : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
+                    ? 'border-blue-500 bg-blue-500/20 text-white'
+                    : 'border-slate-600 bg-slate-700 text-gray-300 hover:border-slate-500'
                     }`}
                 >
                   <Sparkles className="w-5 h-5 mx-auto mb-1" />
@@ -309,8 +321,8 @@ const SettingsPage = () => {
           </h2>
           <div className="space-y-4">
             <div className={`p-4 rounded-lg border ${health.healthy
-                ? 'bg-green-500/10 border-green-500/30'
-                : 'bg-red-500/10 border-red-500/30'
+              ? 'bg-green-500/10 border-green-500/30'
+              : 'bg-red-500/10 border-red-500/30'
               }`}>
               <div className="flex items-center gap-3">
                 <div className={`w-3 h-3 rounded-full ${health.healthy ? 'bg-green-400 animate-pulse' : 'bg-red-400'

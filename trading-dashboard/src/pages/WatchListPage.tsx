@@ -11,16 +11,23 @@ import { getUserStorage } from '../utils/userStorage';
 
 const WatchListPage = () => {
   const { user } = useAuth();
-  const userStorage = getUserStorage(user?.username);
 
-  const [watchlist, setWatchlist] = useState<string[]>(() => {
-    const saved = userStorage.getItem('watchlist');
-    return saved ? JSON.parse(saved) : []; // No mock data - empty by default
-  });
+  // Start empty — will be populated from user-scoped storage once user is known
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [storageLoaded, setStorageLoaded] = useState(false);
   const [predictions, setPredictions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [newSymbol, setNewSymbol] = useState('');
   const [startingBot, setStartingBot] = useState<string | null>(null);
+
+  // Load watchlist from the correct user-scoped key whenever user identity is resolved
+  useEffect(() => {
+    if (!user?.username) return; // Wait until user is known
+    const userStorage = getUserStorage(user.username);
+    const saved = userStorage.getItem('watchlist');
+    setWatchlist(saved ? JSON.parse(saved) : []);
+    setStorageLoaded(true);
+  }, [user?.username]);
 
   const handleAddToWatchlist = (symbol: string) => {
     const normalized = symbol.trim().toUpperCase();
@@ -30,12 +37,15 @@ const WatchListPage = () => {
     }
   };
 
+  // Save watchlist to user-scoped storage and refresh data
   useEffect(() => {
+    if (!user?.username || !storageLoaded) return; // Don't save until initial load is done
+    const userStorage = getUserStorage(user.username);
     userStorage.setItem('watchlist', JSON.stringify(watchlist));
     if (watchlist.length > 0) {
       loadWatchlistData();
     }
-  }, [watchlist]);
+  }, [watchlist, user?.username, storageLoaded]);
 
   const loadWatchlistData = async () => {
     setLoading(true);
