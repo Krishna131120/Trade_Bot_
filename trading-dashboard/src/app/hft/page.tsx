@@ -10,6 +10,7 @@ import HftChatAssistant from '@/components/hft/HftChatAssistant';
 import HftLoadingOverlay from '@/components/hft/HftLoadingOverlay';
 import HftSettingsModal from '@/components/hft/HftSettingsModal';
 import { hftApiService, formatCurrency, formatPercentage, createBotStream } from '@/services/hftApiService';
+import { userAPI } from '@/services/api';
 import type { HftBotData, HftChatMessage } from '@/types/hft';
 import { CheckCircle2, AlertCircle, RefreshCw, Play, Square, LayoutDashboard, Briefcase, MessageCircle } from 'lucide-react';
 
@@ -207,6 +208,17 @@ export default function HftPage() {
     const handleStartBot = async () => {
         try {
             setLoading(true);
+            // 1. Load this user's personal watchlist from MongoDB
+            const userTickers = await userAPI.getWatchlist();
+            // 2. If the user has tickers, sync them to the bot before starting
+            if (userTickers.length > 0) {
+                try {
+                    await hftApiService.bulkUpdateWatchlist(userTickers, 'ADD');
+                } catch {
+                    // If bulk update fails, still try to start
+                }
+            }
+            // 3. Start the bot (it now has the user's tickers)
             await hftApiService.startBot();
             toast.success('Bot started successfully!');
             await refreshData();
@@ -266,10 +278,10 @@ export default function HftPage() {
             const tickerToAdd = normalizedTicker.endsWith('.NS') || normalizedTicker.endsWith('.BO')
                 ? normalizedTicker
                 : normalizedTicker + '.NS';
-            
+
             // Call backend API
             const response = await hftApiService.addToWatchlist(tickerToAdd);
-            
+
             // Update UI immediately with response data
             setBotData(prev => ({
                 ...prev,
@@ -278,7 +290,7 @@ export default function HftPage() {
                     tickers: response.tickers || []
                 }
             }));
-            
+
             toast.success(response.message || `Added ${tickerToAdd} to watchlist`);
         } catch (error) {
             console.error('Error adding ticker:', error);
@@ -292,13 +304,13 @@ export default function HftPage() {
         try {
             // Normalize ticker format
             const normalizedTicker = ticker.toUpperCase().trim();
-            const tickerToRemove = normalizedTicker.endsWith('.NS') || normalizedTicker.endsWith('.BO') 
-                ? normalizedTicker 
+            const tickerToRemove = normalizedTicker.endsWith('.NS') || normalizedTicker.endsWith('.BO')
+                ? normalizedTicker
                 : normalizedTicker + '.NS';
-            
+
             // Call backend API
             const response = await hftApiService.removeFromWatchlist(tickerToRemove);
-            
+
             // Update UI immediately with response data
             setBotData(prev => ({
                 ...prev,
@@ -307,7 +319,7 @@ export default function HftPage() {
                     tickers: response.tickers || []
                 }
             }));
-            
+
             toast.success(response.message || `Removed ${tickerToRemove} from watchlist`);
         } catch (error) {
             console.error('Error removing ticker:', error);
@@ -458,11 +470,10 @@ export default function HftPage() {
                                 <button
                                     key={id}
                                     onClick={() => setActiveTab(id)}
-                                    className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
-                                        activeTab === id
+                                    className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === id
                                             ? isLight ? 'bg-blue-500 text-white' : 'bg-blue-600 text-white'
                                             : isLight ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-400 hover:bg-slate-700'
-                                    }`}
+                                        }`}
                                 >
                                     <Icon className="w-4 h-4" /> {label}
                                 </button>
