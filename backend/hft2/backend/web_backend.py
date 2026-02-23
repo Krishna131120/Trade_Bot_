@@ -3169,6 +3169,126 @@ if JWT_AVAILABLE:
             logger.exception("Save profile error")
             raise HTTPException(status_code=503, detail="Database unavailable")
 
+    # -------------------------------------------------------------------
+    # Per-User Watchlist  (stored in MongoDB  trading.watchlists)
+    # -------------------------------------------------------------------
+    @app.get("/api/user/watchlist")
+    async def get_watchlist(payload: dict = Depends(get_current_user_required)):
+        """Return the authenticated user's watchlist."""
+        try:
+            from db.mongo_client import get_mongo_db
+            db = get_mongo_db("trading")
+            username = payload.get("sub") or ""
+            doc = db["watchlists"].find_one({"username": username})
+            symbols = doc.get("symbols", []) if doc else []
+            return {"symbols": symbols}
+        except Exception:
+            logger.exception("get_watchlist error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+    @app.post("/api/user/watchlist")
+    async def save_watchlist(req: dict, payload: dict = Depends(get_current_user_required)):
+        """Save (replace) the authenticated user's watchlist."""
+        try:
+            from db.mongo_client import get_mongo_db
+            from datetime import datetime
+            db = get_mongo_db("trading")
+            username = payload.get("sub") or ""
+            symbols = req.get("symbols", [])
+            if not isinstance(symbols, list):
+                raise HTTPException(status_code=400, detail="symbols must be a list")
+            db["watchlists"].update_one(
+                {"username": username},
+                {"$set": {"username": username, "symbols": symbols, "updated_at": datetime.utcnow()}},
+                upsert=True,
+            )
+            return {"success": True, "symbols": symbols}
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("save_watchlist error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+    # -------------------------------------------------------------------
+    # Per-User Settings  (stored in MongoDB  trading.user_settings)
+    # -------------------------------------------------------------------
+    @app.get("/api/user/settings")
+    async def get_user_settings(payload: dict = Depends(get_current_user_required)):
+        """Return the authenticated user's settings/preferences."""
+        try:
+            from db.mongo_client import get_mongo_db
+            db = get_mongo_db("trading")
+            username = payload.get("sub") or ""
+            doc = db["user_settings"].find_one({"username": username})
+            if doc:
+                doc.pop("_id", None)
+                doc.pop("username", None)
+            return doc or {}
+        except Exception:
+            logger.exception("get_user_settings error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+    @app.post("/api/user/settings")
+    async def save_user_settings(req: dict, payload: dict = Depends(get_current_user_required)):
+        """Save the authenticated user's settings/preferences."""
+        try:
+            from db.mongo_client import get_mongo_db
+            from datetime import datetime
+            db = get_mongo_db("trading")
+            username = payload.get("sub") or ""
+            update = {k: v for k, v in req.items() if k not in ("username", "_id")}
+            update["username"] = username
+            update["updated_at"] = datetime.utcnow()
+            db["user_settings"].update_one(
+                {"username": username},
+                {"$set": update},
+                upsert=True,
+            )
+            return {"success": True}
+        except Exception:
+            logger.exception("save_user_settings error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+    # -------------------------------------------------------------------
+    # Per-User Alerts  (stored in MongoDB  trading.user_alerts)
+    # -------------------------------------------------------------------
+    @app.get("/api/user/alerts")
+    async def get_user_alerts(payload: dict = Depends(get_current_user_required)):
+        """Return the authenticated user's price alerts."""
+        try:
+            from db.mongo_client import get_mongo_db
+            db = get_mongo_db("trading")
+            username = payload.get("sub") or ""
+            doc = db["user_alerts"].find_one({"username": username})
+            if doc:
+                doc.pop("_id", None)
+                doc.pop("username", None)
+            return doc or {"price_alerts": [], "prediction_alerts": [], "notifications": [], "notification_settings": {}}
+        except Exception:
+            logger.exception("get_user_alerts error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
+    @app.post("/api/user/alerts")
+    async def save_user_alerts(req: dict, payload: dict = Depends(get_current_user_required)):
+        """Save the authenticated user's alerts."""
+        try:
+            from db.mongo_client import get_mongo_db
+            from datetime import datetime
+            db = get_mongo_db("trading")
+            username = payload.get("sub") or ""
+            update = {k: v for k, v in req.items() if k not in ("username", "_id")}
+            update["username"] = username
+            update["updated_at"] = datetime.utcnow()
+            db["user_alerts"].update_one(
+                {"username": username},
+                {"$set": update},
+                upsert=True,
+            )
+            return {"success": True}
+        except Exception:
+            logger.exception("save_user_alerts error")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+
 
 @app.get("/")
 async def index():

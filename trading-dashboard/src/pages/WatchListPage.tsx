@@ -1,51 +1,54 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import { Star, Plus, X, TrendingUp, TrendingDown, Play } from 'lucide-react';
-import { stockAPI, POPULAR_STOCKS } from '../services/api';
+import { stockAPI, POPULAR_STOCKS, userAPI } from '../services/api';
 import { formatUSDToINR } from '../utils/currencyConverter';
 import SymbolAutocomplete from '../components/SymbolAutocomplete';
 import { hftApiService } from '../services/hftApiService';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { getUserStorage } from '../utils/userStorage';
 
 const WatchListPage = () => {
   const { user } = useAuth();
 
-  // Start empty — will be populated from user-scoped storage once user is known
   const [watchlist, setWatchlist] = useState<string[]>([]);
-  const [storageLoaded, setStorageLoaded] = useState(false);
+  const [dbLoaded, setDbLoaded] = useState(false);  // true once initial DB fetch is done
   const [predictions, setPredictions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [newSymbol, setNewSymbol] = useState('');
   const [startingBot, setStartingBot] = useState<string | null>(null);
+  const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load watchlist from the correct user-scoped key whenever user identity is resolved
+  // ── Load from DB whenever the logged-in user changes ───────────────────────
   useEffect(() => {
-    if (!user?.username) return; // Wait until user is known
-    const userStorage = getUserStorage(user.username);
-    const saved = userStorage.getItem('watchlist');
-    setWatchlist(saved ? JSON.parse(saved) : []);
-    setStorageLoaded(true);
+    if (!user?.username) return;
+    setDbLoaded(false);
+    setWatchlist([]);
+    userAPI.getWatchlist()
+      .then(symbols => {
+        setWatchlist(symbols);
+        setDbLoaded(true);
+      })
+      .catch(() => setDbLoaded(true));
   }, [user?.username]);
 
   const handleAddToWatchlist = (symbol: string) => {
     const normalized = symbol.trim().toUpperCase();
     if (normalized && !watchlist.includes(normalized)) {
-      setWatchlist([...watchlist, normalized]);
+      setWatchlist(prev => [...prev, normalized]);
       setNewSymbol('');
     }
   };
 
-  // Save watchlist to user-scoped storage and refresh data
+  // ── Save to DB (debounced) whenever watchlist changes ──────────────────────
   useEffect(() => {
-    if (!user?.username || !storageLoaded) return; // Don't save until initial load is done
-    const userStorage = getUserStorage(user.username);
-    userStorage.setItem('watchlist', JSON.stringify(watchlist));
-    if (watchlist.length > 0) {
-      loadWatchlistData();
-    }
-  }, [watchlist, user?.username, storageLoaded]);
+    if (!dbLoaded) return; // don't save during initial load
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(() => {
+      userAPI.saveWatchlist(watchlist).catch(() => { });
+      if (watchlist.length > 0) loadWatchlistData();
+    }, 500); // debounce 500ms so rapid adds don't spam the server
+  }, [watchlist, dbLoaded]);
 
   const loadWatchlistData = async () => {
     setLoading(true);

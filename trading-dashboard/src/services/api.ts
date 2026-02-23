@@ -703,10 +703,7 @@ export const educationalAPI = {
   },
 };
 
-// User Settings API - ❌ NOT IMPLEMENTED IN BACKEND
-// Backend has NO /api/user/settings endpoints
-// Use localStorage for settings persistence
-// User profile – stored in backend MongoDB (trading.profiles)
+// User Settings API – stored in backend MongoDB
 export const userAPI = {
   getSettings: async () => {
     const response = await api.get('/api/user/profile');
@@ -721,7 +718,48 @@ export const userAPI = {
     });
     return response.data as { success: boolean; message?: string };
   },
+
+  // --- Watchlist (per-user, database-backed) ---
+  getWatchlist: async (): Promise<string[]> => {
+    try {
+      const response = await api.get('/api/user/watchlist');
+      const data = response.data as { symbols?: string[] };
+      return data.symbols ?? [];
+    } catch {
+      return [];
+    }
+  },
+  saveWatchlist: async (symbols: string[]): Promise<void> => {
+    await api.post('/api/user/watchlist', { symbols });
+  },
+
+  // --- User Preferences / Settings (per-user, database-backed) ---
+  getUserSettings: async (): Promise<Record<string, unknown>> => {
+    try {
+      const response = await api.get('/api/user/settings');
+      return (response.data as Record<string, unknown>) ?? {};
+    } catch {
+      return {};
+    }
+  },
+  saveUserSettings: async (settings: Record<string, unknown>): Promise<void> => {
+    await api.post('/api/user/settings', settings);
+  },
+
+  // --- Alerts (per-user, database-backed) ---
+  getAlerts: async (): Promise<Record<string, unknown>> => {
+    try {
+      const response = await api.get('/api/user/alerts');
+      return (response.data as Record<string, unknown>) ?? {};
+    } catch {
+      return {};
+    }
+  },
+  saveAlerts: async (alerts: Record<string, unknown>): Promise<void> => {
+    await api.post('/api/user/alerts', alerts);
+  },
 };
+
 
 // Alert API - ❌ NOT IMPLEMENTED IN BACKEND
 // Backend has NO /api/alerts endpoints

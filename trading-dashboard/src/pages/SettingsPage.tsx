@@ -8,7 +8,7 @@ import { notificationSettingsService, NotificationSettings } from '../services/a
 import { config } from '../config';
 import { LocalStorageWarning } from '../components/LocalStorageWarning';
 import { useAuth } from '../contexts/AuthContext';
-import { getUserStorage } from '../utils/userStorage';
+import { userAPI } from '../services/api';
 
 interface UserPreferences {
   refreshInterval: number; // in seconds
@@ -49,16 +49,15 @@ const SettingsPage = () => {
         setPreferences(defaultPreferences);
         return;
       }
-      // Load settings from user-scoped localStorage
-      const storage = getUserStorage(user.username);
-      const stored = storage.getItem('user_preferences');
-      if (stored) {
-        setPreferences({ ...defaultPreferences, ...JSON.parse(stored) });
+      // Load preferences from database (per-user, isolated by JWT)
+      const stored = await userAPI.getUserSettings();
+      if (stored && Object.keys(stored).length > 0) {
+        setPreferences({ ...defaultPreferences, ...(stored as Partial<UserPreferences>) });
       } else {
         setPreferences(defaultPreferences);
       }
-    } catch (error: any) {
-      setError('Failed to load settings from local storage.');
+    } catch {
+      setError('Failed to load settings.');
       setPreferences(defaultPreferences);
     } finally {
       setLoading(false);
@@ -67,45 +66,53 @@ const SettingsPage = () => {
 
   const savePreferences = async () => {
     try {
-      if (!user?.username) return;
-      // Save preferences to user-scoped localStorage
-      const storage = getUserStorage(user.username);
-      storage.setItem('user_preferences', JSON.stringify(preferences));
+      // Save preferences to database (per-user, isolated by JWT)
+      await userAPI.saveUserSettings(preferences as unknown as Record<string, unknown>);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch (error: any) {
+    } catch {
       setError('Failed to save settings');
     }
   };
 
   const clearAllData = async () => {
-    if (confirm('Are you sure you want to clear all data? This will remove your portfolio, watchlist, alerts, and preferences.')) {
-      // Only clear THIS user's data, not other users'
-      if (user?.username) {
-        getUserStorage(user.username).clearUserData();
+    if (confirm('Are you sure you want to clear all data? This action cannot be undone.')) {
+      try {
+        // Clear all user data from the database
+        await userAPI.saveWatchlist([]);
+        await userAPI.saveUserSettings({});
+        await userAPI.saveAlerts({ price_alerts: [], prediction_alerts: [], notifications: [] });
+        window.location.reload();
+      } catch {
+        alert('Failed to clear data. Please try again.');
       }
-      window.location.reload();
     }
   };
 
   const exportData = async () => {
-    // Export from user-scoped localStorage
-    const storage = user?.username ? getUserStorage(user.username) : getUserStorage(null);
-    const data = {
-      preferences,
-      portfolio: storage.getItem('portfolio_holdings'),
-      watchlist: storage.getItem('watchlist'),
-      alerts: storage.getItem('alerts'),
-      tradingHistory: storage.getItem('tradingHistory'),
-      timestamp: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `trading-dashboard-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const [watchlist, settings, alerts] = await Promise.all([
+        userAPI.getWatchlist(),
+        userAPI.getUserSettings(),
+        userAPI.getAlerts(),
+      ]);
+      const data = {
+        preferences,
+        watchlist,
+        settings,
+        alerts,
+        timestamp: new Date().toISOString(),
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `trading-dashboard-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('Failed to export data.');
+    }
   };
 
   if (loading) {
