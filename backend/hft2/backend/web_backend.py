@@ -3816,7 +3816,8 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
 
 @app.get("/api/stream")
 async def stream_events(request: Request):
-    """SSE endpoint: streams live log lines and periodic bot snapshots to the frontend."""
+    """SSE endpoint: streams live log lines, periodic bot snapshots, and heartbeat pings to the frontend.
+    Heartbeat pings every 15 s prevent browser/proxy SSE timeouts."""
     client_q: "_queue_module.Queue[str]" = _queue_module.Queue(maxsize=1000)
     with _sse_clients_lock:
         _sse_clients.append(client_q)
@@ -3826,6 +3827,7 @@ async def stream_events(request: Request):
             # Send handshake
             yield f"data: {json.dumps({'type': 'connected', 'message': 'Stream connected'})}\n\n"
             last_data_tick = 0.0
+            last_ping_tick = asyncio.get_event_loop().time()
             while True:
                 if await request.is_disconnected():
                     break
@@ -3838,8 +3840,8 @@ async def stream_events(request: Request):
                         drained += 1
                     except _queue_module.Empty:
                         break
-                # Periodic bot snapshot every 5 s
                 now = asyncio.get_event_loop().time()
+                # Periodic bot snapshot every 5 s
                 if now - last_data_tick >= 5.0:
                     last_data_tick = now
                     try:
@@ -3847,6 +3849,10 @@ async def stream_events(request: Request):
                         yield f"data: {json.dumps({'type': 'data', 'payload': snapshot})}\n\n"
                     except Exception:
                         pass
+                # Heartbeat ping every 15 s — keeps proxy/browser connection alive
+                if now - last_ping_tick >= 15.0:
+                    last_ping_tick = now
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
                 await asyncio.sleep(0.2)
         finally:
             with _sse_clients_lock:
@@ -3864,6 +3870,94 @@ async def stream_events(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class OrderRequest(BaseModel):
+    symbol: str
+    side: str          # "BUY" or "SELL"
+    quantity: int = 1
+    order_type: str = "MARKET"
+    price: Optional[float] = None
+
+
+@app.post("/api/order")
+async def place_order(req: OrderRequest):
+    """Place a manual BUY or SELL order via the trading bot's executor."""
+    global trading_bot
+    try:
+        side = req.side.upper()
+        if side not in ("BUY", "SELL"):
+            raise HTTPException(status_code=400, detail="side must be BUY or SELL")
+
+        logger.info(f"Manual order received: {side} {req.quantity}x {req.symbol} @ {req.order_type}")
+
+        # Try live executor first
+        if trading_bot and hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: trading_bot.live_executor.place_order(
+                    symbol=req.symbol,
+                    side=side,
+                    quantity=req.quantity,
+                    order_type=req.order_type,
+                    price=req.price,
+                )
+            )
+            return {"status": "ok", "message": f"{side} order placed for {req.symbol}", "detail": result}
+
+        # Try trading bot executor
+        if trading_bot and hasattr(trading_bot, 'trading_bot') and trading_bot.trading_bot:
+            executor = getattr(trading_bot.trading_bot, 'executor', None)
+            if executor and hasattr(executor, 'place_order'):
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: executor.place_order(
+                        symbol=req.symbol,
+                        action=side,
+                        quantity=req.quantity,
+                    )
+                )
+                return {"status": "ok", "message": f"{side} order placed for {req.symbol}", "detail": result}
+
+        # Paper mode fallback — log the order
+        logger.info(f"[PAPER] {side} {req.quantity}x {req.symbol} — no live executor available")
+        return {"status": "paper", "message": f"[Paper] {side} order recorded for {req.symbol} (no live executor)"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error placing order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/bot/start-with-symbol")
+async def start_bot_with_symbol(req: StartBotWithSymbolRequest):
+    """Start the trading bot initialisation for a specific symbol and return immediately.
+    The frontend connects to /api/stream to follow progress without timing out."""
+    global trading_bot
+    symbol = req.symbol
+    logger.info(f"[API] start-with-symbol requested for: {symbol}")
+    # Fire-and-forget heavy work in background so endpoint returns in < 1 s
+    asyncio.create_task(trigger_all_hft2_components_for_symbol(symbol))
+    return {"status": "pending", "symbol": symbol, "message": f"Bot initialisation started for {symbol}. Connect to /api/stream for live progress."}
+
+
+@app.post("/api/bot/stop")
+async def stop_bot_endpoint():
+    """Stop the running trading bot."""
+    global trading_bot, bot_running
+    try:
+        if trading_bot:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, trading_bot.stop)
+            bot_running = False
+            logger.info("Bot stopped via API")
+            return {"status": "ok", "message": "Bot stopped"}
+        return {"status": "ok", "message": "Bot was not running"}
+    except Exception as e:
+        logger.error(f"Error stopping bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/bot-data")

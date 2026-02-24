@@ -12,3 +12,4 @@ dnspython>=2.4.0
 gnews>=0.3.6
 praw>=7.7.0
 vaderSentiment>=3.3.2
+catboost
