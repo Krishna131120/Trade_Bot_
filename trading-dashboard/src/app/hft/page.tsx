@@ -221,8 +221,12 @@ export default function HftPage() {
             }
             // 3. Start the bot (it now has the user's tickers)
             await hftApiService.startBot();
-            toast.success('Bot started successfully!');
-            await refreshData();
+            // 4. Optimistically mark as running immediately — backend starts in background
+            // so refreshData won't yet show isRunning:true; we set it here so Stop Bot is clickable
+            setBotData(prev => ({ ...prev, isRunning: true }));
+            toast.success('Bot started! Analysis running in background...');
+            // 5. Refresh after a short delay to pick up backend state
+            setTimeout(() => refreshData(), 3000);
         } catch (error) {
             console.error('Error starting bot:', error);
             toast.error('Failed to start bot');
@@ -235,6 +239,8 @@ export default function HftPage() {
         try {
             setLoading(true);
             await hftApiService.stopBot();
+            // Immediately mark as stopped
+            setBotData(prev => ({ ...prev, isRunning: false }));
             toast.success('Bot stopped successfully!');
             await refreshData();
         } catch (error) {

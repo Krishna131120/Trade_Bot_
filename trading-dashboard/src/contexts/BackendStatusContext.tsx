@@ -15,7 +15,7 @@ const BackendStatusContext = createContext<BackendStatusContextType | undefined>
 
 export const BackendStatusProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<BackendStatusState>({
-    isOnline: false,
+    isOnline: true,   // optimistic: assume online until first check fails
     isOffline: false,
     status: 'CHECKING'
   });

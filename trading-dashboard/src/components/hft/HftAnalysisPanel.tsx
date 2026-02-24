@@ -75,6 +75,8 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
     const esRef = useRef<EventSource | null>(null);
     const logRef = useRef<HTMLDivElement | null>(null);
     const startRef = useRef(false);
+    const doneRef = useRef(false);
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Auto-scroll logs
     useEffect(() => {
@@ -89,10 +91,12 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
         setDone(false);
         setError(null);
         setConnecting(true);
+        doneRef.current = false;
     }, []);
 
     const startStream = useCallback(() => {
         if (esRef.current) { esRef.current.close(); esRef.current = null; }
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
         resetState();
 
         const url = `${config.API_BASE_URL}/api/analyze-stream?symbol=${encodeURIComponent(symbol)}`;
@@ -105,11 +109,14 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
                 switch (msg.type) {
                     case 'connected':
                         setConnecting(false);
+                        setError(null);
                         break;
                     case 'progress':
+                        setConnecting(false);
                         setProgress({ step: msg.step, pct: msg.pct });
                         break;
                     case 'log':
+                        setConnecting(false);
                         setLogs(prev => [...prev.slice(-400), { level: msg.level ?? 'INFO', message: msg.message }]);
                         break;
                     case 'indicator':
@@ -126,6 +133,7 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
                         setError(msg.message);
                         break;
                     case 'done':
+                        doneRef.current = true;
                         setDone(true);
                         setProgress(p => p ? { ...p, pct: 100, step: 'Analysis complete' } : p);
                         es.close();
@@ -137,11 +145,16 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
 
         es.onerror = () => {
             setConnecting(false);
-            if (!done) setError('Stream connection lost. The server may still be processing.');
-            es.close();
-            esRef.current = null;
+            if (!doneRef.current) {
+                // Don't show error — backend is processing. Auto-retry after 5s.
+                retryTimerRef.current = setTimeout(() => {
+                    if (!doneRef.current && startRef.current) {
+                        startStream();
+                    }
+                }, 5000);
+            }
         };
-    }, [symbol, onResult, resetState, done]);
+    }, [symbol, onResult, resetState]);
 
     // Start when active flips true (bot started)
     useEffect(() => {
@@ -151,9 +164,12 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
         }
         if (!active) {
             startRef.current = false;
+            doneRef.current = false;
+            if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
         }
         return () => {
             if (esRef.current) { esRef.current.close(); esRef.current = null; }
+            if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
         };
     }, [active, startStream]);
 
@@ -368,6 +384,17 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
                 </div>
             )}
 
+            {/* Active connecting/processing placeholder */}
+            {active && connecting && !result && !progress && (
+                <div style={{
+                    textAlign: 'center', padding: '24px 0',
+                    color: '#79c0ff', fontSize: '0.85rem',
+                }}>
+                    <div style={{ display: 'inline-block', width: 18, height: 18, border: '2px solid #79c0ff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginRight: 8, verticalAlign: 'middle' }} />
+                    Connecting to analysis server for {symbol}...
+                </div>
+            )}
+
             {/* Idle placeholder */}
             {!active && !result && !progress && !error && (
                 <div style={{
@@ -382,6 +409,9 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
                 @keyframes pulse {
                     0%, 100% { opacity: 1; }
                     50% { opacity: 0.4; }
+                }
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
                 }
             `}</style>
         </div>
