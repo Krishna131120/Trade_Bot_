@@ -16,6 +16,21 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import numpy as np
 
+
+def _to_fyers_symbol(symbol: str) -> str:
+    """Convert Yahoo Finance symbol (INFY.NS / INFY.BO) to Fyers format (NSE:INFY-EQ / BSE:INFY-EQ).
+    If the symbol is already in Fyers format it is returned unchanged."""
+    if not symbol:
+        return symbol
+    if ':' in symbol:          # already NSE:XXX-EQ style
+        return symbol
+    if symbol.endswith('.NS'):
+        return f"NSE:{symbol[:-3]}-EQ"
+    if symbol.endswith('.BO'):
+        return f"BSE:{symbol[:-3]}-EQ"
+    # bare ticker — assume NSE
+    return f"NSE:{symbol}-EQ"
+
 # Critical Fix: Lazy imports to prevent circular dependencies
 import sys
 import os
@@ -280,7 +295,7 @@ class TradingAgent:
         try:
             # Use the market analysis tool
             analysis_args = {
-                "symbol": symbol,
+                "symbol": _to_fyers_symbol(symbol),
                 "timeframe": "1D",
                 "lookback_days": 100,
                 "analysis_type": "comprehensive"
@@ -301,15 +316,17 @@ class TradingAgent:
     async def _gather_market_context(self, symbol: str, external_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Gather comprehensive market context"""
         try:
+            # Convert to Fyers symbol format before calling API
+            fyers_sym = _to_fyers_symbol(symbol)
             # Get current market data
-            quotes = await self.fyers_client.get_quotes([symbol])
-            current_data = quotes.get(symbol)
+            quotes = await self.fyers_client.get_quotes([fyers_sym])
+            current_data = quotes.get(fyers_sym)
             
             if not current_data:
                 raise ValueError(f"No market data available for {symbol}")
             
             # Get market depth
-            depth_data = await self.fyers_client.get_market_depth(symbol)
+            depth_data = await self.fyers_client.get_market_depth(fyers_sym)
             
             # Compile market context
             context = {

@@ -23,7 +23,7 @@ export const BackendStatusProvider: React.FC<{ children: React.ReactNode }> = ({
   const checkStatus = async () => {
     setState(prev => ({ ...prev, status: 'CHECKING' }));
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s so UI doesn't block
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s so long analysis doesn't mark backend offline
 
     try {
       // Web backend (5000) exposes /api/health; api_server (8000) has /tools/health

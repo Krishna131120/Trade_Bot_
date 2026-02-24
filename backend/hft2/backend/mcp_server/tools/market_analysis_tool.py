@@ -18,6 +18,17 @@ from dataclasses import dataclass
 # Set up logger first
 logger = logging.getLogger(__name__)
 
+
+def _to_fyers_symbol(symbol: str) -> str:
+    """Convert Yahoo Finance symbol to Fyers format (NSE:TICKER-EQ)."""
+    if not symbol or ':' in symbol:
+        return symbol
+    if symbol.endswith('.NS'):
+        return f"NSE:{symbol[:-3]}-EQ"
+    if symbol.endswith('.BO'):
+        return f"BSE:{symbol[:-3]}-EQ"
+    return f"NSE:{symbol}-EQ"
+
 # Use 'ta' library for technical analysis
 try:
     import ta
@@ -515,13 +526,15 @@ class MarketAnalysisTool:
             
             if not symbol:
                 raise ValueError("Symbol is required")
+
+            fyers_sym = _to_fyers_symbol(symbol)
             
             # Get historical data
             end_date = datetime.now()
             start_date = end_date - timedelta(days=lookback_days)
             
             historical_data = await self.fyers_client.get_historical_data(
-                symbol=symbol,
+                symbol=fyers_sym,
                 resolution=timeframe,
                 from_date=start_date.strftime("%Y-%m-%d"),
                 to_date=end_date.strftime("%Y-%m-%d")
@@ -538,8 +551,8 @@ class MarketAnalysisTool:
             technical_signals = self.analyzer.analyze_comprehensive(df)
             
             # Get current market data
-            current_quotes = await self.fyers_client.get_quotes([symbol])
-            current_data = current_quotes.get(symbol)
+            current_quotes = await self.fyers_client.get_quotes([fyers_sym])
+            current_data = current_quotes.get(fyers_sym)
             
             # Generate reasoning
             reasoning = self._generate_analysis_reasoning(technical_signals, current_data)

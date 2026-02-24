@@ -34,6 +34,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _to_fyers_symbol(symbol: str) -> str:
+    """Convert Yahoo Finance symbol to Fyers format (NSE:TICKER-EQ)."""
+    if not symbol or ':' in symbol:
+        return symbol
+    if symbol.endswith('.NS'):
+        return f"NSE:{symbol[:-3]}-EQ"
+    if symbol.endswith('.BO'):
+        return f"BSE:{symbol[:-3]}-EQ"
+    return f"NSE:{symbol}-EQ"
+
 class TradingDecision(Enum):
     """Trading decision types"""
     BUY = "BUY"
@@ -77,6 +88,15 @@ class AgentMemory:
     performance_metrics: Dict[str, float]
     learned_strategies: List[Dict[str, Any]]
     last_updated: datetime
+
+
+class _SimpleAIDecision:
+    """Minimal AI decision stand-in when Groq is not configured (has .metadata, .confidence, .reasoning)."""
+    def __init__(self, recommendation: str = "HOLD", confidence: float = 0.5, reasoning: str = ""):
+        self.metadata = {"recommendation": recommendation}
+        self.confidence = confidence
+        self.reasoning = reasoning or "No AI reasoning available"
+
 
 class TradingAgent:
     """
@@ -248,9 +268,18 @@ class TradingAgent:
                     risk_metrics=self._get_risk_parameters()
                 )
             
-            # Get AI decision
-            async with self.groq_engine:
-                ai_decision = await self.groq_engine.analyze_market_decision(trading_context)
+            # Get AI decision (skip Groq if not configured — use technicals-only fallback)
+            if getattr(self, 'groq_engine', None):
+                async with self.groq_engine:
+                    ai_decision = await self.groq_engine.analyze_market_decision(trading_context)
+            else:
+                # Fallback: derive simple recommendation from technicals when Groq is unavailable
+                tech = technical_analysis or {}
+                if isinstance(tech, dict) and tech.get("error"):
+                    rec, conf, reason = "WAIT", 0.0, f"Technical analysis unavailable: {tech.get('error', 'unknown')}. Enable Groq for full analysis."
+                else:
+                    rec, conf, reason = "HOLD", 0.5, "AI analysis unavailable (Groq not configured). Using technical indicators only — consider enabling Groq for full analysis."
+                ai_decision = _SimpleAIDecision(recommendation=rec, confidence=conf, reasoning=reason)
             
             # Step 4: ENHANCED ML Integration - Get ensemble predictions
             ensemble_predictions = await self._get_ensemble_ml_predictions(trading_context)
@@ -297,7 +326,7 @@ class TradingAgent:
         try:
             # Use the market analysis tool
             analysis_args = {
-                "symbol": symbol,
+                "symbol": _to_fyers_symbol(symbol),
                 "timeframe": "1D",
                 "lookback_days": 100,
                 "analysis_type": "comprehensive"
@@ -319,14 +348,15 @@ class TradingAgent:
         """Gather comprehensive market context"""
         try:
             # Get current market data
-            quotes = await self.fyers_client.get_quotes([symbol])
-            current_data = quotes.get(symbol)
+            fyers_sym = _to_fyers_symbol(symbol)
+            quotes = await self.fyers_client.get_quotes([fyers_sym])
+            current_data = quotes.get(fyers_sym)
             
             if not current_data:
                 raise ValueError(f"No market data available for {symbol}")
             
             # Get market depth
-            depth_data = await self.fyers_client.get_market_depth(symbol)
+            depth_data = await self.fyers_client.get_market_depth(fyers_sym)
             
             # Compile market context
             context = {
@@ -548,12 +578,15 @@ class TradingAgent:
                 "ml_predictions": ensemble_predictions
             }
             
-            # Get AI risk assessment
-            async with self.groq_engine:
-                risk_response = await self.groq_engine.assess_trade_risk(
-                    trade_details, getattr(context, 'portfolio_data', None) or getattr(context, 'portfolio_context', None)
-                )
-            
+            # Get AI risk assessment (skip if Groq not configured)
+            if getattr(self, 'groq_engine', None):
+                async with self.groq_engine:
+                    risk_response = await self.groq_engine.assess_trade_risk(
+                        trade_details, getattr(context, 'portfolio_data', None) or getattr(context, 'portfolio_context', None)
+                    )
+            else:
+                risk_response = type('RiskResponse', (), {'content': 'Risk assessed from technicals only (Groq not configured).', 'metadata': {'risk_factors': []}})()
+
             # Calculate quantitative risk metrics
             volatility = context.market_data.get("volatility", 0.02)
             risk_score = min(volatility * 10, 10)  # Scale to 1-10
@@ -572,10 +605,10 @@ class TradingAgent:
             adjusted_risk_score = risk_score * agreement_factor
             
             return {
-                "ai_risk_assessment": risk_response.content,
+                "ai_risk_assessment": getattr(risk_response, 'content', str(risk_response)),
                 "risk_score": adjusted_risk_score,
                 "original_risk_score": risk_score,
-                "risk_factors": risk_response.metadata.get("risk_factors", []),
+                "risk_factors": (getattr(risk_response, 'metadata', None) or {}).get("risk_factors", []),
                 "volatility": volatility,
                 "liquidity_risk": self._assess_liquidity_risk(context.market_data),
                 "correlation_risk": await self._assess_correlation_risk(context.symbol),
@@ -713,7 +746,7 @@ class TradingAgent:
                 target_price=target_price,
                 stop_loss=stop_loss,
                 position_size=position_size,
-                reasoning=ai_decision.reasoning or "AI-generated decision",
+                reasoning=getattr(ai_decision, 'reasoning', None) or "AI-generated decision",
                 risk_score=risk_assessment.get("risk_score", 5.0),
                 expected_return=expected_return,
                 time_horizon="1-5 days",  # Default time horizon

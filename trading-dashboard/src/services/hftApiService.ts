@@ -20,15 +20,19 @@ const API_BASE_URL = config.API_BASE_URL;
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({
     baseURL: `${API_BASE_URL}/api`,
-    timeout: 60000, // 60 seconds for bot initialization
+    timeout: 120000, // 120 seconds so long analysis/bot init doesn't timeout
     headers: {
         'Content-Type': 'application/json',
     },
 });
 
-// Request interceptor for logging
+// Request interceptor: attach auth token (so watchlist and bot start are per-user)
 api.interceptors.request.use(
     (config) => {
+        const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
+        if (token && token !== 'no-auth-required' && config.headers) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
         console.log(`[HFT API] Request: ${config.method?.toUpperCase()} ${config.url}`);
         return config;
     },
@@ -77,7 +81,7 @@ export const hftApiService = {
     // ===== Complete Bot Data =====
     async getBotData(): Promise<HftBotData> {
         try {
-            const response = await api.get<HftBotData>('/bot-data', { timeout: 25000 }); // 25s for live Dhan fetch when bot not initialized
+            const response = await api.get<HftBotData>('/bot-data', { timeout: 60000 }); // 60s for live Dhan fetch / bot init when not ready
             return response.data;
         } catch (error) {
             console.error('Error getting bot data:', error);

@@ -6,6 +6,7 @@ import { formatCurrency, hftApiService } from '../../services/hftApiService';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { userAPI } from '../../services/api';
+import HftAnalysisPanel from './HftAnalysisPanel';
 
 const PortfolioContainer = styled.div`
   display: flex;
@@ -767,6 +768,25 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                 )}
                             </div>
                         </Section>
+
+                        {/* Bot Analysis Output — shown per ticker once bot is running */}
+                        {watchlistLoaded && userWatchlist.length > 0 && (
+                            <Section $isLight={isLight}>
+                                <h3>Bot Analysis & Signals</h3>
+                                {!botData.isRunning && (
+                                    <div style={{ color: '#94a3b8', fontStyle: 'italic', marginBottom: 12, fontSize: '0.9rem' }}>
+                                        Press <strong>Start Bot</strong> to run live AI analysis for your watchlist tickers.
+                                    </div>
+                                )}
+                                {userWatchlist.map(ticker => (
+                                    <HftAnalysisPanel
+                                        key={ticker}
+                                        symbol={ticker}
+                                        active={botData.isRunning}
+                                    />
+                                ))}
+                            </Section>
+                        )}
                     </TabPanel>
                 )}
             </TabBody>

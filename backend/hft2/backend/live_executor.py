@@ -623,6 +623,27 @@ class LiveTradingExecutor:
             logger.error(f"❌ Failed to execute buy order for {symbol}: {e}")
             return {"success": False, "message": f"Buy order failed: {str(e)}"}
 
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: int,
+        order_type: str = "MARKET",
+        price: Optional[float] = None,
+    ) -> Dict:
+        """Place a manual BUY or SELL order (used by /api/order)."""
+        side = (side or "BUY").upper()
+        if side not in ("BUY", "SELL"):
+            return {"success": False, "message": "side must be BUY or SELL"}
+        if side == "BUY":
+            signal_data = {
+                "quantity": quantity,
+                "current_price": price or 0,
+                "confidence": 1.0,
+            }
+            return self.execute_buy_order(symbol, signal_data)
+        return self.execute_sell_order(symbol, {"quantity": quantity, "current_price": price})
+
     def execute_sell_order(self, symbol: str, signal_data: Dict = None) -> Dict:
         """Execute a sell order with comprehensive validation"""
         try:
@@ -656,15 +677,22 @@ class LiveTradingExecutor:
                 if not holding or holding.quantity <= 0:
                     return {"success": False, "message": "No position to sell"}
 
+                # Allow partial sell via signal_data.quantity
+                sell_qty = holding.quantity
+                if signal_data and signal_data.get("quantity") is not None:
+                    sell_qty = min(int(signal_data["quantity"]), holding.quantity)
+                if sell_qty <= 0:
+                    return {"success": False, "message": "Invalid sell quantity"}
+
                 # Calculate profit/loss
-                pnl = (current_price - holding.avg_price) * holding.quantity
+                pnl = (current_price - holding.avg_price) * sell_qty
 
                 # Place order through Dhan API with comprehensive validation
                 logger.info(
-                    f"Attempting to place sell order for {holding.quantity} {symbol}")
+                    f"Attempting to place sell order for {sell_qty} {symbol}")
                 order_response = self.dhan_client.place_order(
                     symbol=symbol,
-                    quantity=holding.quantity,
+                    quantity=sell_qty,
                     order_type="MARKET",
                     side="SELL"
                 )
@@ -676,14 +704,14 @@ class LiveTradingExecutor:
                         self.portfolio_manager.record_trade(
                             ticker=symbol,
                             action="sell",
-                            quantity=holding.quantity,
+                            quantity=sell_qty,
                             price=current_price,
                             pnl=pnl,
-                            stop_loss=signal_data.get("stop_loss"),
-                            take_profit=signal_data.get("take_profit")
+                            stop_loss=signal_data.get("stop_loss") if signal_data else None,
+                            take_profit=signal_data.get("take_profit") if signal_data else None
                         )
                         logger.info(
-                            f"✅ Sell trade executed successfully: {holding.quantity} {symbol} at Rs.{current_price:.2f}")
+                            f"✅ Sell trade executed successfully: {sell_qty} {symbol} at Rs.{current_price:.2f}")
                     except Exception as db_error:
                         logger.error(
                             f"❌ Failed to record sell trade in database: {db_error}")
@@ -691,10 +719,10 @@ class LiveTradingExecutor:
                     return {
                         "success": True,
                         "order_id": order_id,
-                        "quantity": holding.quantity,
+                        "quantity": sell_qty,
                         "price": current_price,
                         "pnl": pnl,
-                        "message": f"Sell order placed for {holding.quantity} shares of {symbol}"
+                        "message": f"Sell order placed for {sell_qty} shares of {symbol}"
                     }
                 else:
                     logger.error(

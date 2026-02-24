@@ -42,38 +42,47 @@ export default function HftPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [liveStatus, setLiveStatus] = useState<any>(null);
     const [connected, setConnected] = useState(false);
-    const [streamLogs, setStreamLogs] = useState<string[]>([]);
-    const [userTickers, setUserTickers] = useState<string[]>([]);
 
     // SSE stream: connect once and keep alive; also do an initial REST load
     useEffect(() => {
         initializeApp();
 
         const stopStream = createBotStream(
-            (level, message) => {
-                setStreamLogs(prev => {
-                    const next = [...prev, `[${level}] ${message}`];
-                    return next.length > 500 ? next.slice(next.length - 500) : next;
-                });
-            },
+            (_level, _message) => { /* logs no longer shown in UI */ },
             (payload) => {
-                // Live bot data snapshot from SSE
+                // Live bot data snapshot from SSE — never overwrite non-zero cached values with 0
                 setConnected(true);
-                setBotData(prev => ({
-                    ...prev,
-                    isRunning: payload.isRunning ?? prev.isRunning,
-                    portfolio: {
-                        ...prev.portfolio,
-                        cash: payload.cash ?? prev.portfolio.cash,
-                        totalValue: payload.totalValue ?? prev.portfolio.totalValue,
-                        unrealizedPnL: payload.unrealizedPnL ?? prev.portfolio.unrealizedPnL,
-                        realizedPnL: payload.realizedPnL ?? prev.portfolio.realizedPnL,
-                        holdings: payload.holdings && Object.keys(payload.holdings).length > 0
-                            ? payload.holdings
-                            : prev.portfolio.holdings,
-                    },
-                    analysis: payload.analysis ?? prev.analysis,
-                }));
+                setBotData(prev => {
+                    const prevHoldings = prev.portfolio.holdings || {};
+                    const newHoldings = payload.holdings && Object.keys(payload.holdings).length > 0
+                        ? payload.holdings
+                        : prevHoldings;
+
+                    // Compute totalValue from holdings + cash as a safety net when backend sends 0
+                    const rawCash = (payload.cash != null && payload.cash > 0) ? payload.cash : prev.portfolio.cash;
+                    const rawTotal = (payload.totalValue != null && payload.totalValue > 0) ? payload.totalValue : prev.portfolio.totalValue;
+                    // If still 0 but holdings exist, derive it
+                    const holdingsMarketValue = Object.values(newHoldings).reduce((sum: number, h: any) => {
+                        const price = h.currentPrice || h.avgPrice || 0;
+                        const qty = h.quantity || h.qty || 0;
+                        return sum + price * qty;
+                    }, 0);
+                    const derivedTotal = rawTotal > 0 ? rawTotal : (rawCash + holdingsMarketValue) || prev.portfolio.totalValue;
+
+                    return {
+                        ...prev,
+                        isRunning: payload.isRunning ?? prev.isRunning,
+                        portfolio: {
+                            ...prev.portfolio,
+                            cash: rawCash,
+                            totalValue: derivedTotal,
+                            unrealizedPnL: payload.unrealizedPnL ?? prev.portfolio.unrealizedPnL,
+                            realizedPnL: payload.realizedPnL ?? prev.portfolio.realizedPnL,
+                            holdings: newHoldings,
+                        },
+                        analysis: payload.analysis ?? prev.analysis,
+                    };
+                });
             },
             () => setConnected(true),
         );
@@ -91,11 +100,6 @@ export default function HftPage() {
             setLoading(true);
             await loadDataFromBackend();
             await loadLiveStatus();
-            // Load user's MongoDB watchlist for the analysis panels
-            try {
-                const mongoTickers = await userAPI.getWatchlist();
-                if (mongoTickers.length > 0) setUserTickers(mongoTickers);
-            } catch { /* fallback to botData.config.tickers */ }
             setConnected(true);
             if (botData.chatMessages.length === 0) {
                 setBotData(prev => ({
@@ -145,50 +149,26 @@ export default function HftPage() {
             if (backendMode === 'live') {
                 await loadLiveStatus();
             }
-        } catch (error) {
-            console.error('Error loading data from backend:', error);
-            // Don't show error toast - just mark as disconnected but still show UI
-            setConnected(false);
-            // Try to get saved mode from settings endpoint
-            try {
-                const settings = await hftApiService.getSettings();
-                const savedMode = settings?.mode || 'paper';
-                setBotData(prev => ({
-                    ...prev,
-                    isRunning: false,
-                    config: {
-                        ...prev.config,
-                        mode: savedMode,  // Use saved mode
-                        tickers: prev.config?.tickers || []
-                    },
-                    portfolio: {
-                        ...prev.portfolio,
-                        totalValue: prev.portfolio?.totalValue || 1000000,
-                        cash: prev.portfolio?.cash || 1000000,
-                        holdings: prev.portfolio?.holdings || {},
-                        tradeLog: prev.portfolio?.tradeLog || [],
-                        startingBalance: prev.portfolio?.startingBalance || 1000000
-                    }
-                }));
-            } catch (settingsError) {
-                // Fallback to default
-                setBotData(prev => ({
-                    ...prev,
-                    isRunning: false,
-                    config: {
-                        ...prev.config,
-                        mode: prev.config?.mode || 'paper',
-                        tickers: prev.config?.tickers || []
-                    },
-                    portfolio: {
-                        ...prev.portfolio,
-                        totalValue: prev.portfolio?.totalValue || 1000000,
-                        cash: prev.portfolio?.cash || 1000000,
-                        holdings: prev.portfolio?.holdings || {},
-                        tradeLog: prev.portfolio?.tradeLog || [],
-                        startingBalance: prev.portfolio?.startingBalance || 1000000
-                    }
-                }));
+        } catch (error: any) {
+            // A timeout means the backend is slow/busy, NOT offline — keep previous data visible
+            const isTimeout = error?.message?.includes('timeout') || error?.code === 'ECONNABORTED';
+            const isNetworkError = error?.message === 'Network Error' || error?.code === 'ERR_NETWORK';
+            if (isNetworkError) {
+                // Only mark offline for true connection failures
+                setConnected(false);
+            }
+            // For timeouts or other transient errors, silently keep last known state
+            if (!isTimeout && !isNetworkError) {
+                console.warn('Non-timeout bot data error, trying settings fallback:', error?.message);
+                setConnected(false);
+                try {
+                    const settings = await hftApiService.getSettings();
+                    const savedMode = settings?.mode || 'paper';
+                    setBotData(prev => ({
+                        ...prev,
+                        config: { ...prev.config, mode: savedMode }
+                    }));
+                } catch { /* keep last state */ }
             }
         }
     };
@@ -206,8 +186,23 @@ export default function HftPage() {
         try {
             await loadDataFromBackend();
             await loadLiveStatus();
+            try {
+                await hftApiService.syncLivePortfolio();
+            } catch { /* optional */ }
         } catch (error) {
             console.error('Error refreshing data:', error);
+        }
+    };
+
+    const handlePlaceOrder = async (symbol: string, side: 'BUY' | 'SELL', quantity: number) => {
+        try {
+            const res = await hftApiService.placeOrder(symbol, side, quantity, 'MARKET');
+            const msg = res?.message || res?.detail?.message || `${side} order placed for ${symbol}`;
+            toast.success(msg);
+            await refreshData();
+        } catch (error: any) {
+            console.error('Place order error:', error);
+            toast.error(error?.message || error?.response?.data?.detail || 'Order failed');
         }
     };
 
@@ -355,8 +350,16 @@ export default function HftPage() {
     };
 
     const mode = (liveStatus?.mode ?? botData?.config?.mode) || 'paper';
-    const totalValue = botData.portfolio.totalValue;
-    const cash = botData.portfolio.cash;
+    const cash = botData.portfolio.cash || 0;
+    // If backend sent totalValue=0 but holdings exist, derive it from holdings market value + cash
+    const holdingsMarketValuePage = Object.values(botData.portfolio.holdings || {}).reduce((sum, h: any) => {
+        const price = h.currentPrice || h.avgPrice || 0;
+        const qty = h.quantity || h.qty || 0;
+        return sum + price * qty;
+    }, 0);
+    const totalValue = (botData.portfolio.totalValue || 0) > 0
+        ? botData.portfolio.totalValue
+        : (cash + holdingsMarketValuePage) || 0;
     const startingBalance = botData.portfolio.startingBalance || totalValue;
     const cashInvested = startingBalance - cash;
     const totalReturn = totalValue - startingBalance;
@@ -487,7 +490,7 @@ export default function HftPage() {
                         </div>
                         <div className="p-4 md:p-6 min-h-[400px]">
                             {/* Always show components regardless of trading mode or connection status */}
-                            {activeTab === 'dashboard' && <HftDashboard botData={botData} streamLogs={streamLogs} tickers={userTickers.length > 0 ? userTickers : (botData.config.tickers ?? [])} />}
+                            {activeTab === 'dashboard' && <HftDashboard botData={botData} onPlaceOrder={handlePlaceOrder} onRefresh={refreshData} />}
                             {activeTab === 'portfolio' && (
                                 <HftPortfolio
                                     botData={botData}

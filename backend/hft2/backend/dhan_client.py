@@ -255,9 +255,21 @@ class DhanAPIClient:
         return None
 
     def place_order(self, **kwargs: Any) -> Any:
-        """Place order via Dhan. Stub; implement with Dhan order API if needed."""
-        logger.warning("DhanAPIClient.place_order not implemented")
-        return None
+        """Place order via Dhan using place_order_market (MARKET orders)."""
+        symbol = kwargs.get("symbol", "")
+        side = (kwargs.get("side") or "BUY").upper()
+        quantity = int(kwargs.get("quantity", 0))
+        order_type = (kwargs.get("order_type") or "MARKET").upper()
+        price = kwargs.get("price")
+        if not symbol or quantity <= 0:
+            return None
+        return place_order_market(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            product_type="CNC",
+            trigger_price=float(price) if price is not None else None,
+        )
 
     def get_orders(self) -> List[Dict]:
         """Fetch orders. Stub; implement with Dhan orders API if needed."""

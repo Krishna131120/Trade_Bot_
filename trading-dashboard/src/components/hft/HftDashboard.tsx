@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import styled from 'styled-components';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
@@ -14,8 +14,7 @@ import {
     Filler
 } from 'chart.js';
 import { Line, Doughnut } from 'react-chartjs-2';
-import type { HftBotData, HftSignal } from '../../types/hft';
-import HftAnalysisPanel from './HftAnalysisPanel';
+import type { HftBotData } from '../../types/hft';
 import { formatCurrency } from '../../services/hftApiService';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler);
@@ -156,107 +155,11 @@ const AnalysisPanelTitle = styled.h3`
   font-weight: 600;
 `;
 
-const SignalCard = styled.div<{ $rec: string }>`
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 8px;
-  border-left: 4px solid ${p =>
-        p.$rec === 'BUY' ? '#27ae60' :
-            p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
-  background: ${p =>
-        p.$rec === 'BUY' ? '#f0fff4' :
-            p.$rec === 'SELL' ? '#fff5f5' : '#fffbf0'};
-  margin-bottom: 12px;
-`;
-
-const SignalHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-`;
-
-const SignalSymbol = styled.span`
-  font-weight: 700;
-  font-size: 1rem;
-  color: #2c3e50;
-`;
-
-const SignalBadge = styled.span<{ $rec: string }>`
-  padding: 3px 10px;
-  border-radius: 12px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  background: ${p =>
-        p.$rec === 'BUY' ? '#27ae60' :
-            p.$rec === 'SELL' ? '#e74c3c' : '#f39c12'};
-  color: white;
-`;
-
-const SignalRow = styled.div`
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  font-size: 0.82rem;
-  color: #555;
-`;
-
-const SignalReasoning = styled.div`
-  font-size: 0.8rem;
-  color: #666;
-  line-height: 1.4;
-  border-top: 1px solid rgba(0,0,0,0.06);
-  padding-top: 8px;
-`;
-
 const NoAnalysisMsg = styled.div`
   text-align: center;
   padding: 24px;
   color: #999;
   font-size: 0.9rem;
-`;
-
-const TerminalPanel = styled.div`
-  background: #0d1117;
-  border-radius: 10px;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid #30363d;
-  margin-top: 4px;
-`;
-
-const TerminalHeader = styled.div`
-  background: #161b22;
-  padding: 10px 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid #30363d;
-  h3 { margin: 0; color: #e6edf3; font-size: 0.85rem; font-weight: 600; }
-`;
-
-const TerminalDot = styled.span<{ $color: string }>`
-  width: 10px; height: 10px; border-radius: 50%; background: ${p => p.$color};
-`;
-
-const TerminalBody = styled.div`
-  height: 260px;
-  overflow-y: auto;
-  padding: 12px 16px;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 0.72rem;
-  line-height: 1.6;
-  color: #8b949e;
-  scroll-behavior: smooth;
-`;
-
-const TerminalLine = styled.div<{ $level?: string }>`
-  color: ${p =>
-        p.$level === 'ERROR' ? '#ff7b72' :
-            p.$level === 'WARNING' ? '#e3b341' :
-                p.$level === 'INFO' ? '#79c0ff' : '#8b949e'};
-  word-break: break-all;
 `;
 
 const HoldingsTable = styled.div`
@@ -293,26 +196,37 @@ const PnLCell = styled.td<{ $positive: boolean }>`
   white-space: nowrap;
 `;
 
+const HoldingsActions = styled.div`
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+`;
+
+const ActionBtn = styled.button<{ $variant: 'buy' | 'sell' }>`
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+  cursor: pointer;
+  background: ${p => p.$variant === 'buy' ? '#27ae60' : '#e74c3c'};
+  color: white;
+  &:hover { opacity: 0.9; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+`;
+
 type TimePeriod = '1D' | '1M' | '1Y' | 'All';
 
 interface HftDashboardProps {
     botData: HftBotData;
-    streamLogs?: string[];
-    tickers?: string[];    // user's watchlist symbols — one panel per symbol
+    onPlaceOrder?: (symbol: string, side: 'BUY' | 'SELL', quantity: number) => Promise<void>;
+    onRefresh?: () => Promise<void>;
 }
 
-const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [], tickers = [] }) => {
+const HftDashboard: React.FC<HftDashboardProps> = ({ botData, onPlaceOrder, onRefresh }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('1M');
-    const terminalRef = useRef<HTMLDivElement>(null);
-
-    // Auto-scroll terminal to bottom when new logs arrive
-    useEffect(() => {
-        if (terminalRef.current) {
-            terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-        }
-    }, [streamLogs]);
 
     const getPeriodDescription = (): string => {
         switch (timePeriod) {
@@ -325,17 +239,21 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [], t
     };
 
     const calculateMetrics = () => {
-        const totalValue = botData.portfolio.totalValue || 0;
-        const startingBalance = botData.portfolio.startingBalance || 10000;
+        const cash = botData.portfolio.cash || 0;
 
-        // Calculate unrealized P&L
+        let holdingsMarketValue = 0;
         let unrealizedPnL = 0;
         Object.values(botData.portfolio.holdings || {}).forEach(holding => {
-            const currentPrice = holding.currentPrice || holding.avgPrice || 0;
-            const avgPrice = holding.avgPrice || 0;
-            const qty = holding.quantity || 0;
+            const currentPrice = (holding as any).currentPrice || (holding as any).avgPrice || 0;
+            const avgPrice = (holding as any).avgPrice || 0;
+            const qty = (holding as any).quantity || (holding as any).qty || 0;
+            holdingsMarketValue += currentPrice * qty;
             unrealizedPnL += (currentPrice - avgPrice) * qty;
         });
+
+        // Derive totalValue from holdings + cash if backend sent 0
+        const rawTotal = botData.portfolio.totalValue || 0;
+        const totalValue = rawTotal > 0 ? rawTotal : (cash + holdingsMarketValue) || 0;
 
         const tradesToday = (botData.portfolio.tradeLog || []).filter(trade =>
             trade.timestamp && trade.timestamp.startsWith(new Date().toISOString().split('T')[0])
@@ -690,6 +608,7 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [], t
                                         <Th>Value</Th>
                                         <Th>P&L</Th>
                                         <Th>P&L %</Th>
+                                        {onPlaceOrder && <Th>Actions</Th>}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -713,6 +632,14 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [], t
                                                 <PnLCell $positive={pnlPct >= 0}>
                                                     {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
                                                 </PnLCell>
+                                                {onPlaceOrder && (
+                                                    <Td>
+                                                        <HoldingsActions>
+                                                            <ActionBtn $variant="buy" onClick={() => onPlaceOrder(sym, 'BUY', 1)} title="Buy 1">Buy</ActionBtn>
+                                                            <ActionBtn $variant="sell" onClick={() => onPlaceOrder(sym, 'SELL', qty)} title={`Sell ${qty}`}>Sell</ActionBtn>
+                                                        </HoldingsActions>
+                                                    </Td>
+                                                )}
                                             </tr>
                                         );
                                     })}
@@ -724,68 +651,6 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData, streamLogs = [], t
                     )}
                 </AnalysisPanel>
 
-                {/* Live Streaming Analysis Section — one panel per watchlist symbol */}
-                <AnalysisPanel className="hft-chart">
-                    <AnalysisPanelTitle>Bot Analysis & Signals</AnalysisPanelTitle>
-                    {tickers.length > 0 ? (
-                        tickers.map(sym => (
-                            <HftAnalysisPanel
-                                key={sym}
-                                symbol={sym}
-                                active={botData.isRunning}
-                            />
-                        ))
-                    ) : botData.analysis && botData.analysis.length > 0 ? (
-                        // Fallback: static signals from botData (shown when no tickers prop)
-                        botData.analysis.map((sig: HftSignal, idx: number) => (
-                            <SignalCard key={idx} $rec={sig.recommendation}>
-                                <SignalHeader>
-                                    <SignalSymbol>{sig.symbol}</SignalSymbol>
-                                    <SignalBadge $rec={sig.recommendation}>{sig.recommendation}</SignalBadge>
-                                </SignalHeader>
-                                <SignalRow>
-                                    <span>Confidence: <strong>{sig.confidence != null ? (sig.confidence * 100).toFixed(1) + '%' : 'N/A'}</strong></span>
-                                    {sig.risk_score != null && <span>Risk: <strong>{(sig.risk_score * 100).toFixed(0)}%</strong></span>}
-                                    {sig.target_price != null && <span>Target: <strong>₹{sig.target_price}</strong></span>}
-                                    {sig.stop_loss != null && <span>Stop Loss: <strong>₹{sig.stop_loss}</strong></span>}
-                                    {sig.timestamp && <span style={{ marginLeft: 'auto', color: '#aaa', fontSize: '0.75rem' }}>{new Date(sig.timestamp).toLocaleTimeString('en-IN')}</span>}
-                                </SignalRow>
-                                {sig.reasoning && (
-                                    <SignalReasoning>{sig.reasoning}</SignalReasoning>
-                                )}
-                            </SignalCard>
-                        ))
-                    ) : (
-                        <NoAnalysisMsg>
-                            {botData.isRunning
-                                ? 'Analysis running... signals will appear here once complete.'
-                                : 'Add tickers to your Watchlist, then Start the Bot to see live AI analysis here.'}
-                        </NoAnalysisMsg>
-                    )}
-                </AnalysisPanel>
-
-                {/* Live Terminal Output */}
-                <TerminalPanel>
-                    <TerminalHeader>
-                        <TerminalDot $color="#ff5f57" />
-                        <TerminalDot $color="#ffbd2e" />
-                        <TerminalDot $color="#28c840" />
-                        <h3>Bot Terminal Output</h3>
-                    </TerminalHeader>
-                    <TerminalBody ref={terminalRef}>
-                        {streamLogs.length === 0 ? (
-                            <TerminalLine $level="INFO">{'> Waiting for bot output... Start the bot to see live logs here.'}</TerminalLine>
-                        ) : (
-                            streamLogs.map((line, i) => {
-                                const level = line.startsWith('[ERROR]') ? 'ERROR'
-                                    : line.startsWith('[WARNING]') ? 'WARNING'
-                                        : line.startsWith('[INFO]') ? 'INFO'
-                                            : undefined;
-                                return <TerminalLine key={i} $level={level}>{line}</TerminalLine>;
-                            })
-                        )}
-                    </TerminalBody>
-                </TerminalPanel>
 
             </DashboardContainer>
         </div>

@@ -481,10 +481,14 @@ try:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         return payload
     JWT_AVAILABLE = True
+    get_optional_user = get_current_user  # Optional auth: returns payload or None
 except Exception as e:
     logger.warning(f"JWT auth not available: {e}")
     JWT_AVAILABLE = False
     get_current_user = get_current_user_required = None
+
+    def get_optional_user():
+        return None
 
 # Logger already configured above
 
@@ -591,6 +595,67 @@ bot_thread = None
 bot_running = False
 
 
+# ── Bot-data cache (stale-while-revalidate) ─────────────────────────────────
+# Stores the last successful /api/bot-data response so slow Dhan/Fyers fetches
+# never block the frontend. A background task keeps it fresh every 20 seconds.
+import time as _time_module
+_bot_data_cache: dict = {}
+_bot_data_cache_ts: float = 0.0
+_BOT_DATA_CACHE_TTL: float = 20.0          # seconds before background refresh
+_bot_data_refresh_lock = asyncio.Lock()
+_bot_data_refresh_running: bool = False
+
+async def _refresh_bot_data_cache_background():
+    """Fetch fresh bot-data and store in cache without blocking callers."""
+    global _bot_data_cache, _bot_data_cache_ts, _bot_data_refresh_running
+    if _bot_data_refresh_running:
+        return
+    _bot_data_refresh_running = True
+    try:
+        saved_mode = get_current_saved_mode() or "paper"
+        result = None
+        if trading_bot:
+            current_mode = trading_bot.config.get("mode", saved_mode)
+            if current_mode == "live":
+                try:
+                    from dhan_client import get_live_portfolio
+                    loop = asyncio.get_event_loop()
+                    dhan_portfolio = await asyncio.wait_for(
+                        loop.run_in_executor(None, get_live_portfolio), timeout=25.0
+                    )
+                    if dhan_portfolio:
+                        result = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
+                except Exception:
+                    pass
+            if result is None:
+                try:
+                    loop = asyncio.get_event_loop()
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(None, trading_bot.get_complete_bot_data), timeout=10.0
+                    )
+                except Exception:
+                    pass
+        if result is None and saved_mode == "live":
+            try:
+                from dhan_client import get_live_portfolio
+                loop = asyncio.get_event_loop()
+                dhan_portfolio = await asyncio.wait_for(
+                    loop.run_in_executor(None, get_live_portfolio), timeout=25.0
+                )
+                if dhan_portfolio:
+                    result = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
+            except Exception:
+                pass
+        if result:
+            _bot_data_cache = result
+            _bot_data_cache_ts = _time_module.monotonic()
+    except Exception as _e:
+        logger.warning(f"Background bot-data refresh error: {_e}")
+    finally:
+        _bot_data_refresh_running = False
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _offline_bot_data():
     """Return valid bot-data shape when bot is not initialized so frontend shows offline state instead of 500."""
     saved = {}
@@ -637,6 +702,40 @@ _analysis_semaphore = asyncio.Semaphore(1)
 # Stores latest analysis results per symbol, exposed via /bot-data to the frontend
 _last_bot_analysis: dict = {}
 
+# Per-user bot start: tickers for the user who triggered start (when auth present)
+_pending_start_tickers: list = []
+
+def _get_user_watchlist_from_db(username: str) -> list:
+    """Return the authenticated user's watchlist from MongoDB. Empty list if not found or error."""
+    if not username:
+        return []
+    try:
+        from db.mongo_client import get_mongo_db
+        db = get_mongo_db("trading")
+        doc = db["watchlists"].find_one({"username": username})
+        return list(doc.get("symbols", [])) if doc else []
+    except Exception as e:
+        logger.warning(f"Could not load user watchlist for {username}: {e}")
+        return []
+
+def _save_user_watchlist_to_db(username: str, tickers: list) -> bool:
+    """Save the user's watchlist to MongoDB. Returns True on success."""
+    if not username:
+        return False
+    try:
+        from db.mongo_client import get_mongo_db
+        from datetime import datetime
+        db = get_mongo_db("trading")
+        db["watchlists"].update_one(
+            {"username": username},
+            {"$set": {"username": username, "symbols": tickers, "updated_at": datetime.utcnow()}},
+            upsert=True,
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Could not save user watchlist for {username}: {e}")
+        return False
+
 # ===== SSE Log Broadcasting =====
 _sse_clients: list = []
 _sse_clients_lock = threading.Lock()
@@ -678,10 +777,19 @@ def _build_sse_snapshot() -> dict:
                     "avgPrice": h.get("avgPrice") or h.get("avg_price", 0),
                     "currentPrice": h.get("currentPrice") or h.get("last_price", 0),
                 }
+            cash = portfolio.get("cash", 0)
+            total_value = portfolio.get("totalValue", 0)
+            # If totalValue is 0 but holdings exist, compute from holdings
+            if total_value == 0 and holdings:
+                market_val = sum(
+                    (h.get("currentPrice") or h.get("avgPrice", 0)) * (h.get("quantity", 0))
+                    for h in holdings.values()
+                )
+                total_value = cash + market_val
             return {
                 "isRunning": bot_data.get("isRunning", False),
-                "cash": portfolio.get("cash", 0),
-                "totalValue": portfolio.get("totalValue", 0),
+                "cash": cash,
+                "totalValue": round(total_value, 2),
                 "unrealizedPnL": portfolio.get("unrealizedPnL", 0),
                 "realizedPnL": portfolio.get("realizedPnL", 0),
                 "holdings": holdings,
@@ -3828,6 +3936,7 @@ async def stream_events(request: Request):
             yield f"data: {json.dumps({'type': 'connected', 'message': 'Stream connected'})}\n\n"
             last_data_tick = 0.0
             last_ping_tick = asyncio.get_event_loop().time()
+            last_cache_refresh_tick = 0.0
             while True:
                 if await request.is_disconnected():
                     break
@@ -3841,6 +3950,10 @@ async def stream_events(request: Request):
                     except _queue_module.Empty:
                         break
                 now = asyncio.get_event_loop().time()
+                # Keep bot-data cache warm: trigger background refresh every 20 s
+                if now - last_cache_refresh_tick >= 20.0:
+                    last_cache_refresh_tick = now
+                    asyncio.ensure_future(_refresh_bot_data_cache_background())
                 # Periodic bot snapshot every 5 s
                 if now - last_data_tick >= 5.0:
                     last_data_tick = now
@@ -3962,78 +4075,37 @@ async def stop_bot_endpoint():
 
 @app.get("/api/bot-data")
 async def get_bot_data():
-    """Get complete bot data for React frontend. Returns offline payload when bot not initialized."""
+    """Get complete bot data for React frontend.
+    Stale-while-revalidate: returns cached data immediately (<1 s) and triggers a
+    background refresh so the next call gets fresher data.  The first ever call
+    waits up to 10 s for a real result so the UI has something meaningful on load.
+    """
+    global _bot_data_cache, _bot_data_cache_ts
     try:
-        # Check saved mode first (in case bot not initialized yet)
-        saved_mode = get_current_saved_mode() or "paper"
-        
-        if trading_bot:
-            current_mode = trading_bot.config.get("mode", saved_mode)
-            
-            # For live mode, fetch REAL-TIME data directly from Dhan API in async endpoint
-            if current_mode == "live":
-                try:
-                    logger.info("🔄 Live mode: Fetching REAL-TIME data from Dhan API in endpoint...")
-                    from dhan_client import get_live_portfolio
-                    loop = asyncio.get_event_loop()
-                    
-                    # Fetch Dhan data with timeout (reduced to prevent frontend timeout)
-                    dhan_portfolio = await asyncio.wait_for(
-                        loop.run_in_executor(None, get_live_portfolio),
-                        timeout=8.0  # 8 second timeout for Dhan API (frontend timeout is 25s)
-                    )
-                    
-                    if dhan_portfolio:
-                        logger.info(f"✅ Fetched REAL-TIME Dhan data: cash={dhan_portfolio.get('cash', 0)}, holdings={len(dhan_portfolio.get('holdings', {}))}")
-                        # Use helper function to convert Dhan portfolio to bot data format
-                        return _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
-                    else:
-                        logger.warning("⚠️ Dhan API returned None - falling back to get_complete_bot_data")
-                except asyncio.TimeoutError:
-                    logger.error("❌ Dhan API fetch timed out after 10s - falling back to cached data")
-                except Exception as dhan_err:
-                    logger.error(f"❌ Dhan API fetch failed: {dhan_err} - falling back to cached data")
-            
-            # For paper mode or if Dhan fetch failed, use regular get_complete_bot_data
-            try:
-                loop = asyncio.get_event_loop()
-                bot_data = await asyncio.wait_for(
-                    loop.run_in_executor(None, trading_bot.get_complete_bot_data),
-                    timeout=8.0  # 8 second timeout
-                )
-                return bot_data
-            except asyncio.TimeoutError:
-                logger.error("get_complete_bot_data timed out after 8s")
-                return _offline_bot_data()
-        
-        # Bot not initialized - but if in live mode, try to fetch Dhan data directly
-        if saved_mode == "live":
-            try:
-                logger.info("Bot not initialized but live mode requested - fetching Dhan data directly")
-                from dhan_client import get_live_portfolio
-                loop = asyncio.get_event_loop()
-                try:
-                    # 22s timeout: get_live_portfolio (Dhan API + Fyers LTP per holding) can take 15–20s; frontend timeout is 25s
-                    dhan_portfolio = await asyncio.wait_for(
-                        loop.run_in_executor(None, get_live_portfolio),
-                        timeout=22.0
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("Dhan fetch timed out when bot not initialized (22s limit)")
-                    dhan_portfolio = None
-                
-                if dhan_portfolio:
-                    # Use helper function to convert Dhan portfolio to bot data format
-                    return _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
-            except asyncio.TimeoutError:
-                logger.warning("Dhan fetch timed out - returning offline data")
-            except Exception as dhan_err:
-                logger.warning(f"Failed to fetch Dhan data when bot not initialized: {dhan_err}")
-        
+        now = _time_module.monotonic()
+        cache_age = now - _bot_data_cache_ts
+
+        if _bot_data_cache and cache_age < _BOT_DATA_CACHE_TTL:
+            # Cache is fresh — return immediately and skip background work
+            return _bot_data_cache
+
+        if _bot_data_cache:
+            # Cache is stale — return stale data immediately, refresh in background
+            asyncio.ensure_future(_refresh_bot_data_cache_background())
+            return _bot_data_cache
+
+        # No cache yet — wait for first fill (up to 10 s) so page doesn't start blank
+        await asyncio.wait_for(_refresh_bot_data_cache_background(), timeout=10.0)
+        if _bot_data_cache:
+            return _bot_data_cache
+
         return _offline_bot_data()
+    except asyncio.TimeoutError:
+        logger.warning("First bot-data fill timed out — returning offline payload")
+        return _bot_data_cache if _bot_data_cache else _offline_bot_data()
     except Exception as e:
         logger.error(f"Error getting bot data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return _bot_data_cache if _bot_data_cache else _offline_bot_data()
 
 
 @app.get("/api/portfolio", response_model=PortfolioMetrics)
@@ -4229,20 +4301,26 @@ def _get_indian_market_status() -> str:
 
 
 @app.get("/api/watchlist")
-async def get_watchlist():
-    """Get current watchlist. Returns array of ticker strings."""
+async def get_watchlist(payload: dict = Depends(get_optional_user)):
+    """Get watchlist. When authenticated, returns that user's watchlist from MongoDB (per-user). Otherwise returns global config."""
     try:
+        # Per-user: when authenticated, return only this user's watchlist
+        if payload and isinstance(payload, dict):
+            username = payload.get("sub") or ""
+            if username:
+                tickers = _get_user_watchlist_from_db(username)
+                logger.info(f"📊 GET /api/watchlist: Returning {len(tickers)} tickers for user (MongoDB): {tickers}")
+                return tickers
+        # Global fallback (unauthenticated or no user)
         tickers = []
         if trading_bot:
             tickers = trading_bot.config.get("tickers", [])
         else:
-            # Bot not initialized - load from saved config file
             saved_mode = get_current_saved_mode() or "paper"
             saved_config = load_config_from_file(saved_mode) or {}
             tickers = saved_config.get("tickers", [])
-        
-        logger.info(f"📊 GET /api/watchlist: Returning {len(tickers)} tickers: {tickers}")
-        return tickers  # Return array directly (FastAPI will serialize it)
+        logger.info(f"📊 GET /api/watchlist: Returning {len(tickers)} tickers (global): {tickers}")
+        return tickers
     except Exception as e:
         logger.error(f"Error getting watchlist: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4289,62 +4367,62 @@ async def update_watchlist(request: WatchlistRequest):
 
 
 @app.post("/api/watchlist/add/{ticker}", response_model=WatchlistResponse)
-async def add_to_watchlist(ticker: str):
-    """Add ticker to watchlist via path parameter. Works even when bot not initialized."""
+async def add_to_watchlist(ticker: str, payload: dict = Depends(get_optional_user)):
+    """Add ticker to watchlist. When authenticated, updates only that user's watchlist in MongoDB."""
     try:
         ticker = ticker.upper().strip()
         if not ticker:
             raise HTTPException(status_code=400, detail="Ticker is required")
-
-        # Normalize ticker format (add .NS if not present for Indian stocks)
         if not ticker.endswith(('.NS', '.BO')):
             ticker += '.NS'
-        
+
+        # Per-user: when authenticated, update only this user's watchlist in MongoDB
+        if payload and isinstance(payload, dict):
+            username = payload.get("sub") or ""
+            if username:
+                current_tickers = _get_user_watchlist_from_db(username)
+                if ticker not in current_tickers:
+                    current_tickers.append(ticker)
+                    _save_user_watchlist_to_db(username, current_tickers)
+                    message = f"✅ Added {ticker} to your watchlist"
+                else:
+                    message = f"{ticker} is already in your watchlist"
+                logger.info(f"📊 Watchlist ADD: {ticker} for user {username} (MongoDB)")
+                return WatchlistResponse(message=message, tickers=current_tickers)
+
+        # Global (unauthenticated)
         current_tickers = []
-        
         if trading_bot:
-            # Bot initialized - update bot config AND save to file for persistence
             current_tickers = trading_bot.config.get("tickers", [])
             if ticker not in current_tickers:
                 current_tickers.append(ticker)
                 trading_bot.config["tickers"] = current_tickers
-                message = f"✅ Added {ticker} to watchlist (bot initialized)"
-                logger.info(f"📊 Watchlist ADD: {ticker} - Bot config updated")
-                
-                # Also save to config file for persistence
                 try:
                     saved_mode = get_current_saved_mode() or trading_bot.config.get("mode", "paper")
                     save_config_to_file(saved_mode, trading_bot.config)
-                    logger.info(f"📊 Watchlist ADD: {ticker} - Also saved to {saved_mode}_config.json")
                 except Exception as save_err:
                     logger.warning(f"Failed to save ticker to config file: {save_err}")
-                
-                # Update data feed if it exists
                 try:
                     from data_feed import DataFeed
                     if DataFeed:
                         trading_bot.data_feed = DataFeed(current_tickers)
-                except Exception as e:
-                    logger.warning(f"Failed to update data feed: {e}")
+                except Exception:
+                    pass
+                message = f"✅ Added {ticker} to watchlist"
             else:
                 message = f"{ticker} is already in watchlist"
         else:
-            # Bot not initialized - save to config file
             saved_mode = get_current_saved_mode() or "paper"
             saved_config = load_config_from_file(saved_mode) or {}
             current_tickers = saved_config.get("tickers", [])
-            
             if ticker not in current_tickers:
                 current_tickers.append(ticker)
                 saved_config["tickers"] = current_tickers
                 save_config_to_file(saved_mode, saved_config)
-                message = f"✅ Added {ticker} to watchlist (saved to config - bot will use on start)"
-                logger.info(f"📊 Watchlist ADD: {ticker} - Saved to {saved_mode}_config.json")
+                message = f"✅ Added {ticker} to watchlist (saved to config)"
             else:
                 message = f"{ticker} is already in watchlist"
-        
         return WatchlistResponse(message=message, tickers=current_tickers)
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -4353,60 +4431,60 @@ async def add_to_watchlist(ticker: str):
 
 
 @app.delete("/api/watchlist/remove/{ticker}", response_model=WatchlistResponse)
-async def remove_from_watchlist(ticker: str):
-    """Remove ticker from watchlist via path parameter. Works even when bot not initialized."""
+async def remove_from_watchlist(ticker: str, payload: dict = Depends(get_optional_user)):
+    """Remove ticker from watchlist. When authenticated, updates only that user's watchlist in MongoDB."""
     try:
         ticker = ticker.upper().strip()
-        
-        # Normalize ticker format (add .NS if not present for Indian stocks)
         if not ticker.endswith(('.NS', '.BO')):
             ticker += '.NS'
-        
+
+        # Per-user: when authenticated, update only this user's watchlist in MongoDB
+        if payload and isinstance(payload, dict):
+            username = payload.get("sub") or ""
+            if username:
+                current_tickers = _get_user_watchlist_from_db(username)
+                if ticker in current_tickers:
+                    current_tickers.remove(ticker)
+                    _save_user_watchlist_to_db(username, current_tickers)
+                    message = f"✅ Removed {ticker} from your watchlist"
+                else:
+                    message = f"{ticker} is not in your watchlist"
+                logger.info(f"📊 Watchlist REMOVE: {ticker} for user {username} (MongoDB)")
+                return WatchlistResponse(message=message, tickers=current_tickers)
+
+        # Global (unauthenticated)
         current_tickers = []
-        
         if trading_bot:
-            # Bot initialized - update bot config AND save to file for persistence
             current_tickers = trading_bot.config.get("tickers", [])
             if ticker in current_tickers:
                 current_tickers.remove(ticker)
                 trading_bot.config["tickers"] = current_tickers
-                message = f"✅ Removed {ticker} from watchlist (bot initialized)"
-                logger.info(f"📊 Watchlist REMOVE: {ticker} - Bot config updated")
-                
-                # Also save to config file for persistence
                 try:
                     saved_mode = get_current_saved_mode() or trading_bot.config.get("mode", "paper")
                     save_config_to_file(saved_mode, trading_bot.config)
-                    logger.info(f"📊 Watchlist REMOVE: {ticker} - Also saved to {saved_mode}_config.json")
                 except Exception as save_err:
-                    logger.warning(f"Failed to save ticker removal to config file: {save_err}")
-                
-                # Update data feed if it exists
+                    logger.warning(f"Failed to save config: {save_err}")
                 try:
                     from data_feed import DataFeed
                     if DataFeed:
                         trading_bot.data_feed = DataFeed(current_tickers)
-                except Exception as e:
-                    logger.warning(f"Failed to update data feed: {e}")
+                except Exception:
+                    pass
+                message = f"✅ Removed {ticker} from watchlist"
             else:
                 message = f"{ticker} is not in watchlist"
         else:
-            # Bot not initialized - save to config file
             saved_mode = get_current_saved_mode() or "paper"
             saved_config = load_config_from_file(saved_mode) or {}
             current_tickers = saved_config.get("tickers", [])
-            
             if ticker in current_tickers:
                 current_tickers.remove(ticker)
                 saved_config["tickers"] = current_tickers
                 save_config_to_file(saved_mode, saved_config)
-                message = f"✅ Removed {ticker} from watchlist (saved to config)"
-                logger.info(f"📊 Watchlist REMOVE: {ticker} - Saved to {saved_mode}_config.json")
+                message = f"✅ Removed {ticker} from watchlist"
             else:
                 message = f"{ticker} is not in watchlist"
-            
         return WatchlistResponse(message=message, tickers=current_tickers)
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -4415,13 +4493,9 @@ async def remove_from_watchlist(ticker: str):
 
 
 @app.post("/api/watchlist/bulk", response_model=BulkWatchlistResponse)
-async def bulk_update_watchlist(request: BulkWatchlistRequest):
-    """Add or remove multiple tickers from watchlist"""
+async def bulk_update_watchlist(request: BulkWatchlistRequest, payload: dict = Depends(get_optional_user)):
+    """Add or remove multiple tickers. When authenticated, updates only that user's watchlist in MongoDB."""
     try:
-        if not trading_bot:
-            raise HTTPException(
-                status_code=503, detail="Trading bot not initialized")
-
         action = request.action.upper()
         if action not in ["ADD", "REMOVE"]:
             raise HTTPException(
@@ -4429,44 +4503,50 @@ async def bulk_update_watchlist(request: BulkWatchlistRequest):
 
         successful_tickers = []
         failed_tickers = []
+        use_user_db = payload and isinstance(payload, dict) and (payload.get("sub") or "")
+
+        # Resolve current tickers: per-user from MongoDB when authenticated, else global (bot/config)
+        if use_user_db:
+            current_tickers = list(_get_user_watchlist_from_db(payload.get("sub") or ""))
+        elif trading_bot:
+            current_tickers = list(trading_bot.config.get("tickers", []))
+        else:
+            saved_mode = get_current_saved_mode() or "paper"
+            saved_config = load_config_from_file(saved_mode) or {}
+            current_tickers = list(saved_config.get("tickers", []))
 
         for ticker in request.tickers:
             try:
                 ticker = ticker.strip().upper()
 
-                # Validate ticker format
                 if not ticker:
                     failed_tickers.append(f"{ticker}: Empty ticker")
                     continue
 
-                # Add .NS suffix if not present for Indian stocks
                 if not ticker.endswith(('.NS', '.BO')):
                     ticker += '.NS'
 
-                # Validate ticker format
                 if not ticker.replace('.', '').replace('-', '').replace('&', '').isalnum():
                     failed_tickers.append(f"{ticker}: Invalid format")
                     continue
 
                 if action == "ADD":
-                    if ticker in trading_bot.config["tickers"]:
+                    if ticker in current_tickers:
                         failed_tickers.append(
                             f"{ticker}: Already in watchlist")
                         continue
 
-                    # Add ticker to config
-                    trading_bot.config["tickers"].append(ticker)
+                    current_tickers.append(ticker)
                     successful_tickers.append(ticker)
                     logger.info(
                         f"Added ticker {ticker} to watchlist via bulk upload")
 
                 elif action == "REMOVE":
-                    if ticker not in trading_bot.config["tickers"]:
+                    if ticker not in current_tickers:
                         failed_tickers.append(f"{ticker}: Not in watchlist")
                         continue
 
-                    # Remove ticker from config
-                    trading_bot.config["tickers"].remove(ticker)
+                    current_tickers.remove(ticker)
                     successful_tickers.append(ticker)
                     logger.info(
                         f"Removed ticker {ticker} from watchlist via bulk upload")
@@ -4475,8 +4555,26 @@ async def bulk_update_watchlist(request: BulkWatchlistRequest):
                 failed_tickers.append(f"{ticker}: {str(e)}")
                 logger.error(f"Error processing ticker {ticker}: {e}")
 
-        # Update data feed with new tickers
-        if successful_tickers and action == "ADD" and DataFeed:
+        # Persist: per-user to MongoDB when authenticated, else global bot/config
+        if use_user_db:
+            _save_user_watchlist_to_db(payload.get("sub") or "", current_tickers)
+            logger.info(f"📊 Watchlist bulk {action} for user (MongoDB): {len(successful_tickers)} tickers")
+        elif trading_bot:
+            trading_bot.config["tickers"] = current_tickers
+            try:
+                saved_mode = get_current_saved_mode() or trading_bot.config.get("mode", "paper")
+                save_config_to_file(saved_mode, trading_bot.config)
+            except Exception as save_err:
+                logger.warning(f"Failed to save bulk watchlist to config file: {save_err}")
+        else:
+            saved_mode = get_current_saved_mode() or "paper"
+            saved_config = load_config_from_file(saved_mode) or {}
+            saved_config["tickers"] = current_tickers
+            save_config_to_file(saved_mode, saved_config)
+            logger.info(f"📊 Watchlist bulk {action}: saved to {saved_mode}_config.json (bot not initialized)")
+
+        # Update data feed with new tickers (only when bot initialized and not per-user)
+        if successful_tickers and action == "ADD" and DataFeed and trading_bot and not use_user_db:
             try:
                 trading_bot.data_feed = DataFeed(trading_bot.config["tickers"])
                 logger.info(
@@ -4719,10 +4817,20 @@ What would you like to analyze today?""",
 
 
 @app.post("/api/start", response_model=MessageResponse)
-async def start_bot():
-    """Start the trading bot - returns immediately, runs heavy operations in background"""
+async def start_bot(payload: dict = Depends(get_optional_user)):
+    """Start the trading bot - returns immediately, runs heavy operations in background. When authenticated, uses that user's watchlist only."""
     try:
-        global trading_bot
+        global trading_bot, _pending_start_tickers
+        # Per-user: when authenticated, set tickers to this user's watchlist so bot runs only their symbols
+        if payload and isinstance(payload, dict):
+            username = payload.get("sub") or ""
+            if username:
+                _pending_start_tickers = _get_user_watchlist_from_db(username)
+                logger.info(f"📊 Bot start: using watchlist for user ({len(_pending_start_tickers)} tickers from MongoDB)")
+            else:
+                _pending_start_tickers = []
+        else:
+            _pending_start_tickers = []
 
         # Initialize bot if not already initialized (start in background, don't wait)
         if not trading_bot:
@@ -4784,12 +4892,19 @@ async def start_bot():
                             logger.error("❌ Module global trading_bot is also None!")
                     # Start the bot and trigger predictions for watchlist (same as when we wait)
                     if trading_bot:
+                        global _pending_start_tickers
                         saved_mode = get_current_saved_mode() or "paper"
                         saved_config = load_config_from_file(saved_mode) or {}
-                        saved_tickers = saved_config.get("tickers", [])
-                        if saved_tickers:
-                            trading_bot.config["tickers"] = saved_tickers
-                            logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
+                        # Per-user: use requesting user's watchlist if set, else saved config
+                        if _pending_start_tickers:
+                            trading_bot.config["tickers"] = list(_pending_start_tickers)
+                            logger.info(f"📊 Loaded {len(_pending_start_tickers)} tickers for user (from MongoDB): {_pending_start_tickers}")
+                            _pending_start_tickers = []
+                        else:
+                            saved_tickers = saved_config.get("tickers", [])
+                            if saved_tickers:
+                                trading_bot.config["tickers"] = saved_tickers
+                                logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
                         risk_level = trading_bot.config.get("riskLevel", "MEDIUM")
                         apply_risk_level_settings(trading_bot, risk_level)
                         await loop.run_in_executor(None, trading_bot.start)
@@ -4818,14 +4933,19 @@ async def start_bot():
             )
 
         if trading_bot:
-            # Ensure watchlist tickers are loaded from saved config if bot was just initialized
-            saved_mode = get_current_saved_mode() or "paper"
-            saved_config = load_config_from_file(saved_mode) or {}
-            saved_tickers = saved_config.get("tickers", [])
-            if saved_tickers and not trading_bot.config.get("tickers"):
-                trading_bot.config["tickers"] = saved_tickers
-                logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
-            
+            # Per-user: use requesting user's watchlist if set; else ensure tickers from saved config
+            if _pending_start_tickers:
+                trading_bot.config["tickers"] = list(_pending_start_tickers)
+                logger.info(f"📊 Using {len(_pending_start_tickers)} tickers for user: {_pending_start_tickers}")
+                _pending_start_tickers = []
+            else:
+                saved_mode = get_current_saved_mode() or "paper"
+                saved_config = load_config_from_file(saved_mode) or {}
+                saved_tickers = saved_config.get("tickers", [])
+                if saved_tickers and not trading_bot.config.get("tickers"):
+                    trading_bot.config["tickers"] = saved_tickers
+                    logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
+
             # Apply current risk level settings before starting
             risk_level = trading_bot.config.get("riskLevel", "MEDIUM")
             apply_risk_level_settings(trading_bot, risk_level)
@@ -4905,9 +5025,9 @@ async def stop_bot():
 
 
 @app.post("/api/bot/start", response_model=MessageResponse)
-async def start_bot_bot_route():
-    """Start the trading bot (alias for /api/start). Used by frontend Start Bot button."""
-    return await start_bot()
+async def start_bot_bot_route(payload: dict = Depends(get_optional_user)):
+    """Start the trading bot (alias for /api/start). Uses authenticated user's watchlist when present."""
+    return await start_bot(payload)
 
 
 @app.post("/api/bot/stop", response_model=MessageResponse)
@@ -5463,10 +5583,13 @@ async def get_live_trading_status():
 
 @app.post("/api/live/sync")
 async def sync_live_portfolio():
-    """Force a Dhan sync and return a brief snapshot"""
+    """Force a Dhan sync and return a brief snapshot. Returns 200 with success=false when bot not ready (avoids frontend 400 errors)."""
     try:
         if not trading_bot or trading_bot.config.get("mode") != "live":
-            raise HTTPException(status_code=400, detail="Not in live mode")
+            return JSONResponse(
+                status_code=200,
+                content={"success": False, "message": "Not in live mode or bot not initialized. Portfolio will update when bot is ready."},
+            )
 
         # Use the sync service for immediate sync
         sync_service = get_sync_service()
