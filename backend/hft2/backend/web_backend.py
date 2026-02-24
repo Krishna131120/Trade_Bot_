@@ -593,6 +593,7 @@ async def general_exception_handler(request, exc: Exception):
 trading_bot = None
 bot_thread = None
 bot_running = False
+_continuous_loop_task: asyncio.Task = None  # Background continuous analysis loop
 
 
 # ── Bot-data cache (stale-while-revalidate) ─────────────────────────────────
@@ -937,6 +938,98 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
             logger.error(f"❌ Error in HFT2 backend process for {symbol}: {process_error}")
             logger.exception("Full traceback:")
 
+
+async def _continuous_trading_loop():
+    """Background loop: analyze all watchlist tickers continuously while bot is running.
+    Re-runs every sleep_interval seconds. Executes buy/sell via live executor if confidence threshold met."""
+    global trading_bot, _continuous_loop_task
+    logger.info("🔄 Continuous trading loop started")
+    try:
+        while True:
+            try:
+                if not trading_bot or not trading_bot.is_running:
+                    logger.info("⏹ Continuous loop: bot stopped, exiting")
+                    break
+                tickers = trading_bot.config.get("tickers", [])
+                sleep_secs = trading_bot.config.get("sleep_interval", 300)
+                if tickers:
+                    logger.info(f"🔁 Continuous loop: analyzing {len(tickers)} tickers: {tickers}")
+                    for sym in tickers:
+                        if not trading_bot or not trading_bot.is_running:
+                            break
+                        try:
+                            await trigger_all_hft2_components_for_symbol(sym)
+                            # After analysis, attempt autonomous trade execution based on stored signal
+                            if trading_bot and trading_bot.is_running:
+                                analysis = _last_bot_analysis.get(sym, {})
+                                rec = analysis.get("recommendation", "WAIT").upper()
+                                conf = float(analysis.get("confidence", 0.0))
+                                min_conf = trading_bot.config.get("min_confidence", 0.6)
+                                if rec == "BUY" and conf >= min_conf:
+                                    logger.info(f"🤖 Auto-buy signal for {sym} (confidence={conf:.2f})")
+                                    if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
+                                        signal_data = {
+                                            "confidence": conf,
+                                            "current_price": analysis.get("target_price"),
+                                            "stop_loss": analysis.get("stop_loss"),
+                                            "take_profit": analysis.get("target_price"),
+                                        }
+                                        loop = asyncio.get_event_loop()
+                                        result = await loop.run_in_executor(
+                                            None,
+                                            lambda s=sym, sd=signal_data: trading_bot.live_executor.execute_buy_order(s, sd)
+                                        )
+                                        if result and result.get("success"):
+                                            logger.info(f"✅ Auto-buy executed for {sym}: {result.get('message')}")
+                                        else:
+                                            logger.info(f"ℹ️ Auto-buy skipped for {sym}: {result.get('message', 'no result')}")
+                                elif rec == "SELL" and conf >= min_conf:
+                                    logger.info(f"🤖 Auto-sell signal for {sym} (confidence={conf:.2f})")
+                                    if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
+                                        signal_data = {"confidence": conf, "current_price": analysis.get("target_price")}
+                                        loop = asyncio.get_event_loop()
+                                        result = await loop.run_in_executor(
+                                            None,
+                                            lambda s=sym, sd=signal_data: trading_bot.live_executor.execute_sell_order(s, sd)
+                                        )
+                                        if result and result.get("success"):
+                                            logger.info(f"✅ Auto-sell executed for {sym}: {result.get('message')}")
+                                        else:
+                                            logger.info(f"ℹ️ Auto-sell skipped for {sym}: {result.get('message', 'no result')}")
+                        except Exception as sym_err:
+                            logger.warning(f"⚠️ Continuous loop error for {sym}: {sym_err}")
+                    logger.info(f"✅ Continuous loop cycle done. Sleeping {sleep_secs}s before next cycle.")
+                else:
+                    sleep_secs = 60
+                    logger.debug("Continuous loop: no tickers, sleeping 60s")
+            except asyncio.CancelledError:
+                raise
+            except Exception as loop_err:
+                logger.error(f"❌ Continuous trading loop error: {loop_err}")
+            await asyncio.sleep(sleep_secs)
+    except asyncio.CancelledError:
+        logger.info("⏹ Continuous trading loop cancelled")
+    finally:
+        logger.info("🔄 Continuous trading loop exited")
+
+
+def _start_continuous_loop():
+    """Start the continuous trading loop as an asyncio background task."""
+    global _continuous_loop_task
+    if _continuous_loop_task and not _continuous_loop_task.done():
+        logger.info("ℹ️ Continuous loop already running")
+        return
+    _continuous_loop_task = asyncio.create_task(_continuous_trading_loop())
+    logger.info("✅ Continuous trading loop task created")
+
+
+def _stop_continuous_loop():
+    """Cancel the continuous trading loop task."""
+    global _continuous_loop_task
+    if _continuous_loop_task and not _continuous_loop_task.done():
+        _continuous_loop_task.cancel()
+        logger.info("⏹ Continuous trading loop cancelled")
+    _continuous_loop_task = None
 
 
 async def get_real_time_market_response(message: str) -> Optional[str]:
@@ -4914,6 +5007,8 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
                             for symbol in tickers_list:
                                 asyncio.create_task(trigger_all_hft2_components_for_symbol(symbol))
                             logger.info(f"📊 Triggered predictions/analysis for watchlist in background")
+                        # Start the continuous analysis/trading loop
+                        _start_continuous_loop()
                 except Exception as init_error:
                     logger.error(f"❌ Background bot initialization failed: {init_error}")
                     logger.exception("Full traceback:")
@@ -4982,6 +5077,9 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
                 # Start predictions in background (non-blocking) - don't await
                 asyncio.create_task(trigger_predictions_for_all_tickers())
             
+            # Start the continuous analysis/trading loop
+            _start_continuous_loop()
+            
             # Return immediately - don't wait for predictions
             return MessageResponse(message=f"Bot started successfully with {risk_level} risk level (Stop Loss: {stop_loss_pct}%, Max Allocation: {max_allocation_pct}%, Watchlist: {tickers_count} tickers). Predictions running in background...")
         else:
@@ -5012,6 +5110,7 @@ async def init_bot():
 async def stop_bot():
     """Stop the trading bot"""
     try:
+        _stop_continuous_loop()
         if trading_bot:
             trading_bot.stop()
             return MessageResponse(message="Bot stopped successfully")
@@ -5617,20 +5716,12 @@ async def sync_live_portfolio():
         if not ok:
             raise HTTPException(
                 status_code=502, detail="Failed to sync with Dhan")
-        pf = trading_bot.live_executor.portfolio
-        holdings_value = 0.0
-        try:
-            if isinstance(pf.holdings, dict):
-                holdings_value = sum(h.get("total_value", 0.0)
-                                     for h in pf.holdings.values())
-        except Exception:
-            holdings_value = 0.0
-        total_value = float(getattr(pf, "cash", 0.0)) + float(holdings_value)
+        portfolio_data = trading_bot.get_portfolio_metrics() if trading_bot else {}
         return {
             "synced": True,
-            "cash": float(getattr(pf, "cash", 0.0)),
-            "holdings_value": float(holdings_value),
-            "total_value": float(total_value)
+            "cash": portfolio_data.get("cash", 0.0),
+            "holdings_value": portfolio_data.get("total_value", 0.0) - portfolio_data.get("cash", 0.0),
+            "total_value": portfolio_data.get("total_value", 0.0)
         }
     except HTTPException:
         raise
@@ -6332,6 +6423,12 @@ async def _ensure_mcp_initialized():
                 "llama": {
                     "llama_base_url": "http://localhost:11434",
                     "llama_model": "llama3.1:8b"
+                },
+                "groq": {
+                    "groq_api_key": os.getenv("GROQ_API_KEY"),
+                    "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                    "max_tokens": int(os.getenv("GROQ_MAX_TOKENS", "2048")),
+                    "temperature": float(os.getenv("GROQ_TEMPERATURE", "0.1")),
                 }
             }
             mcp_trading_agent = TradingAgent(agent_config)

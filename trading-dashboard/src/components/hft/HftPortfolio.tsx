@@ -439,11 +439,12 @@ interface HftPortfolioProps {
     botData: HftBotData;
     onAddTicker: (ticker: string) => Promise<void>;
     onRemoveTicker: (ticker: string) => Promise<void>;
+    onRefresh?: () => Promise<void>;
 }
 
 type OrderSide = 'BUY' | 'SELL';
 
-const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRemoveTicker }) => {
+const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRemoveTicker, onRefresh }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
     const { user } = useAuth();
@@ -576,16 +577,28 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
             toast.error('Enter a valid quantity');
             return;
         }
+        const slPct = parseFloat(orderModal.stopLossPct);
         setLoading(true);
         try {
-            await hftApiService.placeOrder(orderModal.symbol, orderModal.side, qty, 'MARKET');
-            toast.success(`${orderModal.side} order placed for ${orderModal.symbol}`);
+            const result = await hftApiService.placeOrder(
+                orderModal.symbol,
+                orderModal.side,
+                qty,
+                'MARKET',
+                undefined,
+                isNaN(slPct) ? undefined : slPct,
+            );
+            const msg = result?.message || `${orderModal.side} order placed for ${orderModal.symbol}`;
+            toast.success(msg);
             closeOrderModal();
+            // Refresh Dhan portfolio so holdings/P&L update immediately
+            if (onRefresh) await onRefresh();
             const trades = await hftApiService.getTrades(50);
             setTradeHistory(trades);
-        } catch (err) {
+        } catch (err: any) {
             console.error('Place order error:', err);
-            toast.error('Failed to place order');
+            const detail = err?.response?.data?.detail || err?.message || 'Failed to place order';
+            toast.error(detail);
         } finally {
             setLoading(false);
         }

@@ -156,7 +156,16 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
         };
     }, [symbol, onResult, resetState]);
 
-    // Start when active flips true (bot started)
+    // Reset fully when the symbol changes so a newly-added ticker starts fresh
+    useEffect(() => {
+        startRef.current = false;
+        doneRef.current = false;
+        if (esRef.current) { esRef.current.close(); esRef.current = null; }
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+        setProgress(null); setIndicators([]); setResult(null); setLogs([]); setDone(false); setError(null); setConnecting(false);
+    }, [symbol]);
+
+    // Start/stop stream when active flips
     useEffect(() => {
         if (active && !startRef.current) {
             startRef.current = true;
@@ -206,8 +215,20 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
                     </span>
                 )}
                 {done && (
-                    <span style={{ fontSize: '0.75rem', color: '#3fb950', marginLeft: 'auto' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#3fb950', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                         ✓ Analysis Complete
+                        {active && (
+                            <button
+                                onClick={() => { startRef.current = false; doneRef.current = false; startStream(); }}
+                                style={{
+                                    background: 'rgba(79,184,255,0.15)', border: '1px solid #4ab8ff',
+                                    borderRadius: 4, color: '#79c0ff', cursor: 'pointer',
+                                    fontSize: '0.7rem', padding: '2px 8px', marginLeft: 4,
+                                }}
+                            >
+                                ↻ Re-analyze
+                            </button>
+                        )}
                     </span>
                 )}
                 {!active && !done && (

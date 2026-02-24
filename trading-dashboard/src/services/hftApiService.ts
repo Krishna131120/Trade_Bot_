@@ -297,9 +297,15 @@ export const hftApiService = {
     },
 
     // ===== Place order (buy/sell) =====
-    async placeOrder(symbol: string, side: 'BUY' | 'SELL', quantity: number, orderType: string = 'MARKET', price?: number): Promise<any> {
+    async placeOrder(symbol: string, side: 'BUY' | 'SELL', quantity: number, orderType: string = 'MARKET', price?: number, stopLossPct?: number): Promise<any> {
         try {
-            const response = await api.post('/order', { symbol, side, quantity, order_type: orderType, price });
+            const body: Record<string, unknown> = { symbol, side, quantity, order_type: orderType, price };
+            if (stopLossPct && stopLossPct > 0 && price && price > 0) {
+                body.stop_loss = side === 'BUY'
+                    ? price * (1 - stopLossPct / 100)
+                    : price * (1 + stopLossPct / 100);
+            }
+            const response = await api.post('/order', body);
             return response.data;
         } catch (error) {
             console.error('Error placing order:', error);

@@ -30,6 +30,16 @@ def _to_fyers_symbol(symbol: str) -> str:
     return f"NSE:{symbol}-EQ"
 
 
+def _fyers_symbol_alternatives(symbol: str):
+    """Return list of Fyers symbols to try in order (primary then fallback)."""
+    primary = _to_fyers_symbol(symbol)
+    # If the primary exchange is BSE, also try NSE as fallback
+    if primary.startswith("BSE:"):
+        ticker = primary[4:].replace("-EQ", "")
+        return [primary, f"NSE:{ticker}-EQ"]
+    return [primary]
+
+
 # Use 'ta' library for technical analysis
 try:
     import ta
@@ -528,25 +538,64 @@ class MarketAnalysisTool:
             if not symbol:
                 raise ValueError("Symbol is required")
 
-            fyers_sym = _to_fyers_symbol(symbol)
+            # Try primary symbol, fall back to NSE if BSE returns 404
+            candidates = _fyers_symbol_alternatives(symbol)
+            fyers_sym = candidates[0]
 
             # Get historical data
             end_date = datetime.now()
             start_date = end_date - timedelta(days=lookback_days)
-            
-            historical_data = await self.fyers_client.get_historical_data(
-                symbol=fyers_sym,
-                resolution=timeframe,
-                from_date=start_date.strftime("%Y-%m-%d"),
-                to_date=end_date.strftime("%Y-%m-%d")
-            )
-            
-            if not historical_data:
+
+            historical_data = None
+            for candidate in candidates:
+                try:
+                    historical_data = await self.fyers_client.get_historical_data(
+                        symbol=candidate,
+                        resolution=timeframe,
+                        from_date=start_date.strftime("%Y-%m-%d"),
+                        to_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    if historical_data:
+                        fyers_sym = candidate
+                        break
+                except Exception as fetch_err:
+                    logger.warning(f"Fyers historical data failed for {candidate}: {fetch_err}")
+
+            df = None
+            if historical_data:
+                df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            else:
+                # Fallback: try Yahoo Finance when all Fyers symbols fail
+                logger.warning(f"All Fyers symbols failed for {symbol}, falling back to Yahoo Finance")
+                try:
+                    import yfinance as yf
+                    loop = asyncio.get_event_loop()
+                    def _yf_download(sym):
+                        ticker = yf.Ticker(sym)
+                        hist = ticker.history(period=f"{lookback_days}d")
+                        return hist
+                    yf_data = await asyncio.wait_for(
+                        loop.run_in_executor(None, _yf_download, symbol),
+                        timeout=15.0
+                    )
+                    if yf_data is not None and not yf_data.empty:
+                        df = yf_data.rename(columns={
+                            'Open': 'open', 'High': 'high', 'Low': 'low',
+                            'Close': 'close', 'Volume': 'volume'
+                        })[['open', 'high', 'low', 'close', 'volume']].reset_index()
+                        df.rename(columns={'Date': 'timestamp', 'Datetime': 'timestamp'}, errors='ignore', inplace=True)
+                        if 'timestamp' not in df.columns:
+                            df.insert(0, 'timestamp', df.index)
+                        logger.info(f"Yahoo Finance fallback succeeded for {symbol}: {len(df)} rows")
+                    else:
+                        raise ValueError(f"No historical data available for {symbol} from Fyers or Yahoo Finance")
+                except Exception as yf_err:
+                    logger.error(f"Yahoo Finance fallback also failed for {symbol}: {yf_err}")
+                    raise ValueError(f"No historical data available for {symbol}")
+
+            if df is None or df.empty:
                 raise ValueError(f"No historical data available for {symbol}")
-            
-            # Convert to DataFrame
-            df = pd.DataFrame(historical_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             
             # Perform technical analysis
             technical_signals = self.analyzer.analyze_comprehensive(df)

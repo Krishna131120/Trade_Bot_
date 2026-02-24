@@ -288,8 +288,61 @@ class DhanAPIClient:
         return True
 
 
+# Cache for Dhan instruments to avoid repeated downloads
+_dhan_instruments_cache: Dict = {}
+_dhan_instruments_cache_ts: float = 0.0
+_DHAN_INSTRUMENTS_TTL: float = 3600.0  # 1 hour
+
+
+def _fetch_dhan_instruments() -> Dict[str, Dict]:
+    """Download and cache Dhan compact instruments CSV to resolve security IDs by trading symbol."""
+    global _dhan_instruments_cache, _dhan_instruments_cache_ts
+    if _dhan_instruments_cache and (time.time() - _dhan_instruments_cache_ts) < _DHAN_INSTRUMENTS_TTL:
+        return _dhan_instruments_cache
+    try:
+        import urllib.request
+        import csv
+        import io
+        url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+        with urllib.request.urlopen(url, timeout=15) as r:
+            content = r.read().decode("utf-8", errors="ignore")
+        reader = csv.DictReader(io.StringIO(content))
+        instruments: Dict[str, Dict] = {}
+        for row in reader:
+            sym = str(row.get("SEM_TRADING_SYMBOL") or row.get("TRADING_SYMBOL") or "").strip().upper()
+            seg = str(row.get("SEM_EXM_EXCH_ID") or row.get("EXCH_ID") or "NSE").strip().upper()
+            sid = str(row.get("SEM_SMST_SECURITY_ID") or row.get("SECURITY_ID") or "").strip()
+            if sym and sid and seg in ("NSE", "BSE"):
+                key = f"{seg}:{sym}"
+                instruments[key] = {"securityId": sid, "exchange_segment": f"{seg}_EQ"}
+                if sym not in instruments:
+                    instruments[sym] = {"securityId": sid, "exchange_segment": f"{seg}_EQ"}
+        _dhan_instruments_cache = instruments
+        _dhan_instruments_cache_ts = time.time()
+        logger.info("Dhan instruments cache loaded: %d symbols", len(instruments))
+    except Exception as e:
+        logger.warning("Failed to load Dhan instruments CSV: %s", e)
+    return _dhan_instruments_cache
+
+
+def _resolve_dhan_security_id(sym_clean: str) -> tuple:
+    """Resolve Dhan securityId for a trading symbol. Returns (security_id, exchange_segment) or (None, 'NSE_EQ')."""
+    instruments = _fetch_dhan_instruments()
+    # Try NSE first, then BSE
+    for prefix in ("NSE", "BSE"):
+        key = f"{prefix}:{sym_clean}"
+        if key in instruments:
+            info = instruments[key]
+            return info["securityId"], info["exchange_segment"]
+    # Try plain symbol
+    if sym_clean in instruments:
+        info = instruments[sym_clean]
+        return info["securityId"], info["exchange_segment"]
+    return None, "NSE_EQ"
+
+
 def place_order_market(symbol: str, side: str, quantity: int, product_type: str = "CNC", trigger_price: Optional[float] = None) -> Optional[Dict]:
-    """Place MARKET order via Dhan. Resolves securityId from holdings. Returns order response or None."""
+    """Place MARKET order via Dhan. Resolves securityId from holdings, positions, or instruments master. Returns order response or None."""
     token = get_dhan_token()
     client_id = get_dhan_client_id()
     if not token or not client_id:
@@ -311,7 +364,10 @@ def place_order_market(symbol: str, side: str, quantity: int, product_type: str 
                 exchange_segment = str(p.get("exchangeSegment", "NSE_EQ"))
                 break
     if not security_id:
-        logger.warning("Could not resolve securityId for %s (not in holdings/positions)", symbol)
+        # Fallback: look up from Dhan instruments master CSV
+        security_id, exchange_segment = _resolve_dhan_security_id(sym_clean)
+    if not security_id:
+        logger.warning("Could not resolve securityId for %s (not in holdings/positions/instruments)", symbol)
         return None
     body = {
         "dhanClientId": client_id,

@@ -45,6 +45,15 @@ def _to_fyers_symbol(symbol: str) -> str:
         return f"BSE:{symbol[:-3]}-EQ"
     return f"NSE:{symbol}-EQ"
 
+
+def _fyers_symbol_alternatives(symbol: str):
+    """Return list of Fyers symbols to try in order (primary then NSE fallback for BSE)."""
+    primary = _to_fyers_symbol(symbol)
+    if primary.startswith("BSE:"):
+        ticker = primary[4:].replace("-EQ", "")
+        return [primary, f"NSE:{ticker}-EQ"]
+    return [primary]
+
 class TradingDecision(Enum):
     """Trading decision types"""
     BUY = "BUY"
@@ -271,7 +280,7 @@ class TradingAgent:
             # Get AI decision (skip Groq if not configured — use technicals-only fallback)
             if getattr(self, 'groq_engine', None):
                 async with self.groq_engine:
-                    ai_decision = await self.groq_engine.analyze_market_decision(trading_context)
+                    ai_decision = await self.groq_engine.analyze_market_decision(symbol, trading_context)
             else:
                 # Fallback: derive simple recommendation from technicals when Groq is unavailable
                 tech = technical_analysis or {}
@@ -326,7 +335,7 @@ class TradingAgent:
         try:
             # Use the market analysis tool
             analysis_args = {
-                "symbol": _to_fyers_symbol(symbol),
+                "symbol": symbol,  # Pass raw symbol; analyze_market handles conversion internally
                 "timeframe": "1D",
                 "lookback_days": 100,
                 "analysis_type": "comprehensive"
@@ -334,8 +343,9 @@ class TradingAgent:
             
             result = await self.market_analyzer.analyze_market(analysis_args, f"session_{self.agent_id}")
             
-            if result.status.value == "success":
-                return result.data["technical_signals"]
+            status_val = result.status.value if hasattr(result.status, 'value') else str(result.status)
+            if status_val.upper() == "SUCCESS":
+                return result.data.get("technical_signals", result.data)
             else:
                 logger.warning(f"Technical analysis failed for {symbol}: {result.error}")
                 return {"error": result.error}
@@ -347,29 +357,68 @@ class TradingAgent:
     async def _gather_market_context(self, symbol: str, external_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Gather comprehensive market context"""
         try:
-            # Get current market data
-            fyers_sym = _to_fyers_symbol(symbol)
-            quotes = await self.fyers_client.get_quotes([fyers_sym])
-            current_data = quotes.get(fyers_sym)
+            # Get current market data — try BSE then fall back to NSE on failure
+            candidates = _fyers_symbol_alternatives(symbol)
+            fyers_sym = candidates[0]
+            current_data = None
+            for candidate in candidates:
+                try:
+                    quotes = await self.fyers_client.get_quotes([candidate])
+                    current_data = quotes.get(candidate)
+                    if current_data:
+                        fyers_sym = candidate
+                        break
+                except Exception as qerr:
+                    logger.warning(f"Quotes failed for {candidate}: {qerr}")
             
             if not current_data:
-                raise ValueError(f"No market data available for {symbol}")
-            
-            # Get market depth
-            depth_data = await self.fyers_client.get_market_depth(fyers_sym)
-            
+                # Fallback: get current price from Yahoo Finance
+                logger.warning(f"All Fyers quotes failed for {symbol}, falling back to Yahoo Finance for current price")
+                try:
+                    import yfinance as yf
+                    import asyncio as _asyncio
+                    loop = _asyncio.get_event_loop()
+                    def _yf_price(sym):
+                        t = yf.Ticker(sym)
+                        hist = t.history(period="2d")
+                        return float(hist['Close'].iloc[-1]) if not hist.empty else None
+                    ltp = await _asyncio.wait_for(loop.run_in_executor(None, _yf_price, symbol), timeout=10.0)
+                    if not ltp:
+                        raise ValueError(f"No market data available for {symbol}")
+                    # Build minimal context from Yahoo Finance price
+                    return {
+                        "current_price": ltp,
+                        "bid_ask_spread": 0,
+                        "volume": 0,
+                        "volatility": 0.02,
+                        "market_depth": {"bid_levels": 0, "ask_levels": 0, "total_bid_size": 0, "total_ask_size": 0},
+                        "data_source": "yahoo_finance",
+                        **(external_context or {})
+                    }
+                except Exception as yf_err:
+                    raise ValueError(f"No market data available for {symbol}: {yf_err}")
+
+            # Get market depth (best effort - skip if it fails)
+            try:
+                depth_data = await self.fyers_client.get_market_depth(fyers_sym)
+                depth_info = {
+                    "bid_levels": len(depth_data.bids) if depth_data else 0,
+                    "ask_levels": len(depth_data.asks) if depth_data else 0,
+                    "total_bid_size": sum(bid["size"] for bid in depth_data.bids) if depth_data else 0,
+                    "total_ask_size": sum(ask["size"] for ask in depth_data.asks) if depth_data else 0,
+                }
+                spread = abs(depth_data.asks[0]["price"] - depth_data.bids[0]["price"]) if (depth_data and depth_data.asks and depth_data.bids) else 0
+            except Exception:
+                depth_info = {"bid_levels": 0, "ask_levels": 0, "total_bid_size": 0, "total_ask_size": 0}
+                spread = 0
+
             # Compile market context
             context = {
                 "current_price": current_data.ltp,
-                "bid_ask_spread": abs(depth_data.asks[0]["price"] - depth_data.bids[0]["price"]) if depth_data.asks and depth_data.bids else 0,
+                "bid_ask_spread": spread,
                 "volume": current_data.volume,
-                "volatility": abs(current_data.high_price - current_data.low_price) / current_data.ltp,
-                "market_depth": {
-                    "bid_levels": len(depth_data.bids),
-                    "ask_levels": len(depth_data.asks),
-                    "total_bid_size": sum(bid["size"] for bid in depth_data.bids),
-                    "total_ask_size": sum(ask["size"] for ask in depth_data.asks)
-                },
+                "volatility": abs(current_data.high_price - current_data.low_price) / current_data.ltp if current_data.ltp else 0.02,
+                "market_depth": depth_info,
                 "timestamp": datetime.now().isoformat()
             }
             

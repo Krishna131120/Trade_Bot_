@@ -502,6 +502,7 @@ export default function HftPage() {
                                     botData={botData}
                                     onAddTicker={handleAddTicker}
                                     onRemoveTicker={handleRemoveTicker}
+                                    onRefresh={refreshData}
                                 />
                             )}
                             {activeTab === 'chat' && (
