@@ -706,6 +706,9 @@ _last_bot_analysis: dict = {}
 # Per-user bot start: tickers for the user who triggered start (when auth present)
 _pending_start_tickers: list = []
 
+# Module-level flag to prevent double-initialization (replaces fragile function-attribute pattern)
+_bot_initializing: bool = False
+
 def _get_user_watchlist_from_db(username: str) -> list:
     """Return the authenticated user's watchlist from MongoDB. Empty list if not found or error."""
     if not username:
@@ -871,11 +874,12 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                             "horizon": "day",
                             "include_explanations": True
                         }, session_id)
-                        if pred_result.status == "SUCCESS":
+                        status_str = pred_result.status.value if hasattr(pred_result.status, 'value') else str(pred_result.status)
+                        if status_str.upper() == "SUCCESS":
                             prediction_result = pred_result.data
                             logger.info(f"✅ Prediction completed for {symbol}: {prediction_result}")
                         else:
-                            logger.warning(f"⚠️ Prediction returned status: {pred_result.status}")
+                            logger.warning(f"⚠️ Prediction returned status: {status_str}")
                     except Exception as pred_error:
                         logger.warning(f"⚠️ Prediction failed for {symbol}: {pred_error}")
                         logger.exception("Prediction error traceback:")
@@ -940,7 +944,8 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
 
 
 async def _continuous_trading_loop():
-    """Background loop: analyze all watchlist tickers continuously while bot is running.
+    """Background loop: analyze all watchlist tickers sequentially and continuously while bot is running.
+    After completing each ticker, checks if new tickers were added and processes them in the same cycle.
     Re-runs every sleep_interval seconds. Executes buy/sell via live executor if confidence threshold met."""
     global trading_bot, _continuous_loop_task
     logger.info("🔄 Continuous trading loop started")
@@ -950,58 +955,91 @@ async def _continuous_trading_loop():
                 if not trading_bot or not trading_bot.is_running:
                     logger.info("⏹ Continuous loop: bot stopped, exiting")
                     break
-                tickers = trading_bot.config.get("tickers", [])
                 sleep_secs = trading_bot.config.get("sleep_interval", 300)
-                if tickers:
-                    logger.info(f"🔁 Continuous loop: analyzing {len(tickers)} tickers: {tickers}")
-                    for sym in tickers:
-                        if not trading_bot or not trading_bot.is_running:
-                            break
-                        try:
-                            await trigger_all_hft2_components_for_symbol(sym)
-                            # After analysis, attempt autonomous trade execution based on stored signal
-                            if trading_bot and trading_bot.is_running:
-                                analysis = _last_bot_analysis.get(sym, {})
-                                rec = analysis.get("recommendation", "WAIT").upper()
-                                conf = float(analysis.get("confidence", 0.0))
-                                min_conf = trading_bot.config.get("min_confidence", 0.6)
-                                if rec == "BUY" and conf >= min_conf:
-                                    logger.info(f"🤖 Auto-buy signal for {sym} (confidence={conf:.2f})")
-                                    if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
-                                        signal_data = {
-                                            "confidence": conf,
-                                            "current_price": analysis.get("target_price"),
-                                            "stop_loss": analysis.get("stop_loss"),
-                                            "take_profit": analysis.get("target_price"),
-                                        }
-                                        loop = asyncio.get_event_loop()
-                                        result = await loop.run_in_executor(
-                                            None,
-                                            lambda s=sym, sd=signal_data: trading_bot.live_executor.execute_buy_order(s, sd)
-                                        )
-                                        if result and result.get("success"):
-                                            logger.info(f"✅ Auto-buy executed for {sym}: {result.get('message')}")
-                                        else:
-                                            logger.info(f"ℹ️ Auto-buy skipped for {sym}: {result.get('message', 'no result')}")
-                                elif rec == "SELL" and conf >= min_conf:
-                                    logger.info(f"🤖 Auto-sell signal for {sym} (confidence={conf:.2f})")
-                                    if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
-                                        signal_data = {"confidence": conf, "current_price": analysis.get("target_price")}
-                                        loop = asyncio.get_event_loop()
-                                        result = await loop.run_in_executor(
-                                            None,
-                                            lambda s=sym, sd=signal_data: trading_bot.live_executor.execute_sell_order(s, sd)
-                                        )
-                                        if result and result.get("success"):
-                                            logger.info(f"✅ Auto-sell executed for {sym}: {result.get('message')}")
-                                        else:
-                                            logger.info(f"ℹ️ Auto-sell skipped for {sym}: {result.get('message', 'no result')}")
-                        except Exception as sym_err:
-                            logger.warning(f"⚠️ Continuous loop error for {sym}: {sym_err}")
-                    logger.info(f"✅ Continuous loop cycle done. Sleeping {sleep_secs}s before next cycle.")
-                else:
-                    sleep_secs = 60
-                    logger.debug("Continuous loop: no tickers, sleeping 60s")
+
+                # Build a working list for this cycle; we'll append new tickers as they are added
+                # by re-reading the config after each symbol is processed.
+                initial_tickers = list(trading_bot.config.get("tickers", []))
+                if not initial_tickers:
+                    await asyncio.sleep(60)
+                    continue
+
+                logger.info(f"🔁 Continuous loop cycle start: {len(initial_tickers)} tickers: {initial_tickers}")
+
+                # Use a set to track what we've already processed this cycle to avoid re-processing
+                processed_this_cycle: set = set()
+                # Work queue: process initial tickers first
+                work_queue = list(initial_tickers)
+
+                while work_queue:
+                    sym = work_queue.pop(0)
+                    if sym in processed_this_cycle:
+                        continue
+                    processed_this_cycle.add(sym)
+
+                    if not trading_bot or not trading_bot.is_running:
+                        break
+
+                    try:
+                        # Hard timeout per ticker: 3 minutes max so loop never hangs
+                        await asyncio.wait_for(
+                            trigger_all_hft2_components_for_symbol(sym),
+                            timeout=180.0
+                        )
+
+                        # After analysis, attempt autonomous trade execution based on stored signal
+                        if trading_bot and trading_bot.is_running:
+                            analysis = _last_bot_analysis.get(sym, {})
+                            rec = analysis.get("recommendation", "WAIT").upper()
+                            conf = float(analysis.get("confidence", 0.0))
+                            min_conf = trading_bot.config.get("min_confidence", 0.6)
+                            if rec == "BUY" and conf >= min_conf:
+                                logger.info(f"🤖 Auto-buy signal for {sym} (confidence={conf:.2f})")
+                                if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
+                                    signal_data = {
+                                        "confidence": conf,
+                                        "current_price": analysis.get("current_price") or analysis.get("target_price"),
+                                        "stop_loss": analysis.get("stop_loss"),
+                                        "take_profit": analysis.get("target_price"),
+                                    }
+                                    loop = asyncio.get_event_loop()
+                                    result = await loop.run_in_executor(
+                                        None,
+                                        lambda s=sym, sd=signal_data: trading_bot.live_executor.execute_buy_order(s, sd)
+                                    )
+                                    if result and result.get("success"):
+                                        logger.info(f"✅ Auto-buy executed for {sym}: {result.get('message')}")
+                                    else:
+                                        logger.info(f"ℹ️ Auto-buy skipped for {sym}: {result.get('message', 'no result')}")
+                            elif rec == "SELL" and conf >= min_conf:
+                                logger.info(f"🤖 Auto-sell signal for {sym} (confidence={conf:.2f})")
+                                if hasattr(trading_bot, 'live_executor') and trading_bot.live_executor:
+                                    signal_data = {"confidence": conf, "current_price": analysis.get("current_price") or analysis.get("target_price")}
+                                    loop = asyncio.get_event_loop()
+                                    result = await loop.run_in_executor(
+                                        None,
+                                        lambda s=sym, sd=signal_data: trading_bot.live_executor.execute_sell_order(s, sd)
+                                    )
+                                    if result and result.get("success"):
+                                        logger.info(f"✅ Auto-sell executed for {sym}: {result.get('message')}")
+                                    else:
+                                        logger.info(f"ℹ️ Auto-sell skipped for {sym}: {result.get('message', 'no result')}")
+
+                    except asyncio.TimeoutError:
+                        logger.warning(f"⚠️ Analysis timed out for {sym} (>180s) — moving to next ticker")
+                    except Exception as sym_err:
+                        logger.warning(f"⚠️ Continuous loop error for {sym}: {sym_err}")
+
+                    # After each ticker, check if new tickers were added to the watchlist
+                    # If so, append them to the current cycle's work queue so they're processed now
+                    if trading_bot:
+                        current_tickers = list(trading_bot.config.get("tickers", []))
+                        for new_sym in current_tickers:
+                            if new_sym not in processed_this_cycle and new_sym not in work_queue:
+                                logger.info(f"➕ New ticker detected mid-cycle, adding to current cycle: {new_sym}")
+                                work_queue.append(new_sym)
+
+                logger.info(f"✅ Continuous loop cycle done ({len(processed_this_cycle)} tickers). Sleeping {sleep_secs}s before next cycle.")
             except asyncio.CancelledError:
                 raise
             except Exception as loop_err:
@@ -3867,7 +3905,7 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                 from news_sentiment import get_indian_news_sentiment
                 sent = await asyncio.wait_for(
                     loop.run_in_executor(None, get_indian_news_sentiment, sym),
-                    timeout=30.0
+                    timeout=12.0  # Hard cap: don't let news search freeze the UI
                 )
                 if isinstance(sent, dict):
                     sentiment_score = float(sent.get("score", 0))
@@ -4927,11 +4965,8 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
 
         # Initialize bot if not already initialized (start in background, don't wait)
         if not trading_bot:
-            # Use a flag to track if initialization is in progress
-            if not hasattr(start_bot, '_initializing'):
-                start_bot._initializing = False
-            
-            if start_bot._initializing:
+            global _bot_initializing
+            if _bot_initializing:
                 # Initialization already in progress
                 return MessageResponse(
                     message="Bot initialization is already in progress. Please wait a few seconds and try again."
@@ -4939,10 +4974,10 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
             
             async def init_bot_background():
                 """Initialize bot in background, then start it and trigger predictions for watchlist."""
-                global trading_bot
+                global trading_bot, _bot_initializing
                 logger.info("🚀 init_bot_background() async function STARTED")
                 try:
-                    start_bot._initializing = True
+                    _bot_initializing = True
                     logger.info("🚀 Set _initializing flag to True")
                     loop = asyncio.get_event_loop()
                     logger.info("🔄 About to run initialize_bot() in executor...")
@@ -5003,17 +5038,14 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
                         await loop.run_in_executor(None, trading_bot.start)
                         tickers_list = trading_bot.config.get("tickers", [])
                         logger.info(f"🚀 Bot started in background with {len(tickers_list)} tickers: {tickers_list}")
-                        if tickers_list:
-                            for symbol in tickers_list:
-                                asyncio.create_task(trigger_all_hft2_components_for_symbol(symbol))
-                            logger.info(f"📊 Triggered predictions/analysis for watchlist in background")
-                        # Start the continuous analysis/trading loop
+                        # Start the continuous loop — it will process all tickers sequentially
                         _start_continuous_loop()
+                        logger.info(f"✅ Continuous trading loop task created")
                 except Exception as init_error:
                     logger.error(f"❌ Background bot initialization failed: {init_error}")
                     logger.exception("Full traceback:")
                 finally:
-                    start_bot._initializing = False
+                    _bot_initializing = False
             
             # Start initialization in background (non-blocking) - return immediately
             asyncio.create_task(init_bot_background())
@@ -5028,60 +5060,58 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
             )
 
         if trading_bot:
-            # Per-user: use requesting user's watchlist if set; else ensure tickers from saved config
+            # Resolve the new tickers list
             if _pending_start_tickers:
-                trading_bot.config["tickers"] = list(_pending_start_tickers)
-                logger.info(f"📊 Using {len(_pending_start_tickers)} tickers for user: {_pending_start_tickers}")
+                new_tickers = list(_pending_start_tickers)
                 _pending_start_tickers = []
             else:
                 saved_mode = get_current_saved_mode() or "paper"
                 saved_config = load_config_from_file(saved_mode) or {}
-                saved_tickers = saved_config.get("tickers", [])
-                if saved_tickers and not trading_bot.config.get("tickers"):
-                    trading_bot.config["tickers"] = saved_tickers
-                    logger.info(f"📊 Loaded {len(saved_tickers)} tickers from saved config: {saved_tickers}")
+                new_tickers = saved_config.get("tickers", []) or trading_bot.config.get("tickers", [])
 
-            # Apply current risk level settings before starting
+            # Figure out which tickers are brand-new (not yet analyzed)
+            old_tickers = list(trading_bot.config.get("tickers", []))
+            added_tickers = [t for t in new_tickers if t not in old_tickers]
+
+            # Update config with the full new ticker list
+            trading_bot.config["tickers"] = new_tickers
+            logger.info(f"📊 Updated tickers: {new_tickers} (new: {added_tickers})")
+
+            # Apply risk settings
             risk_level = trading_bot.config.get("riskLevel", "MEDIUM")
             apply_risk_level_settings(trading_bot, risk_level)
 
-            # Start bot in executor to avoid blocking
-            loop = asyncio.get_event_loop()
-            await asyncio.wait_for(
-                loop.run_in_executor(None, trading_bot.start),
-                timeout=2.0  # 2 second timeout for start() call
-            )
-            
+            # If bot is NOT already running, start it (don't call start() if it's already running)
+            if not trading_bot.is_running:
+                loop = asyncio.get_event_loop()
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, trading_bot.start),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    # start() is non-blocking once running; timeout just means it's busy
+                    logger.warning("trading_bot.start() timed out (bot may already be active)")
+            else:
+                logger.info("📊 Bot already running — updating tickers list only")
+
             stop_loss_pct = trading_bot.config.get('stop_loss_pct', 0.05) * 100
-            max_allocation_pct = trading_bot.config.get(
-                'max_capital_per_trade', 0.25) * 100
-            tickers_count = len(trading_bot.config.get("tickers", []))
-            tickers_list = trading_bot.config.get("tickers", [])
-            logger.info(f"🚀 Trading bot started with {risk_level} risk level, {tickers_count} tickers: {tickers_list}")
-            
-            # Trigger predictions and analysis for all watchlist tickers in background (non-blocking)
-            if tickers_list:
-                async def trigger_predictions_for_all_tickers():
-                    try:
-                        logger.info(f"📊 Triggering predictions/analysis for {len(tickers_list)} watchlist tickers: {tickers_list}")
-                        for symbol in tickers_list:
-                            try:
-                                # Trigger the same HFT2 components as start_bot_with_symbol
-                                await trigger_all_hft2_components_for_symbol(symbol)
-                            except Exception as symbol_err:
-                                logger.warning(f"⚠️ Failed to trigger predictions for {symbol}: {symbol_err}")
-                        logger.info(f"✅ Completed predictions/analysis for all watchlist tickers")
-                    except Exception as err:
-                        logger.error(f"❌ Error triggering predictions for watchlist: {err}")
-                
-                # Start predictions in background (non-blocking) - don't await
-                asyncio.create_task(trigger_predictions_for_all_tickers())
-            
-            # Start the continuous analysis/trading loop
+            max_allocation_pct = trading_bot.config.get('max_capital_per_trade', 0.25) * 100
+            tickers_count = len(new_tickers)
+            logger.info(f"🚀 Bot active with {risk_level} risk, {tickers_count} tickers: {new_tickers}")
+
+            # Don't immediately trigger analysis here — the continuous loop will pick up new tickers
+            # on its next cycle. Triggering here while the loop is mid-analysis saturates the
+            # thread pool and causes the frontend to freeze on "processing".
+            if added_tickers:
+                logger.info(f"📊 New tickers queued for next loop cycle: {added_tickers}")
+
+            # Ensure continuous loop is running (start if not already active)
             _start_continuous_loop()
-            
-            # Return immediately - don't wait for predictions
-            return MessageResponse(message=f"Bot started successfully with {risk_level} risk level (Stop Loss: {stop_loss_pct}%, Max Allocation: {max_allocation_pct}%, Watchlist: {tickers_count} tickers). Predictions running in background...")
+
+            if added_tickers:
+                return MessageResponse(message=f"Bot running with {tickers_count} tickers. {len(added_tickers)} new ticker(s) will be analyzed in the next loop cycle.")
+            return MessageResponse(message=f"Bot running with {tickers_count} tickers.")
         else:
             raise HTTPException(status_code=500, detail="Bot not initialized")
     except HTTPException:

@@ -227,11 +227,21 @@ class AdvancedTechnicalAnalyzer:
             # Parabolic SAR
             sar = ta.trend.psar_up(df['high'], df['low'], df['close'])
             
-            # Additional indicators
-            # Aroon indicators
-            aroon_up = ta.trend.aroon_up(df['close'], window=14)
-            aroon_down = ta.trend.aroon_down(df['close'], window=14)
-            aroon_osc = ta.trend.aroon_indicator(df['close'], window=14)
+            # Additional indicators - Aroon (API varies by ta version; try both signatures)
+            try:
+                _aroon = ta.trend.AroonIndicator(high=df['high'], low=df['low'], window=14)
+                aroon_up = _aroon.aroon_up()
+                aroon_down = _aroon.aroon_down()
+                aroon_osc = _aroon.aroon_indicator()
+            except Exception:
+                try:
+                    aroon_up = ta.trend.aroon_up(df['high'], df['low'], window=14)
+                    aroon_down = ta.trend.aroon_down(df['high'], df['low'], window=14)
+                    aroon_osc = ta.trend.aroon_indicator(df['high'], df['low'], window=14)
+                except Exception:
+                    aroon_up = pd.Series([50.0] * len(df), index=df.index)
+                    aroon_down = pd.Series([50.0] * len(df), index=df.index)
+                    aroon_osc = pd.Series([0.0] * len(df), index=df.index)
         
         # Calculate trend signals
         current_price = df['close'].iloc[-1]
