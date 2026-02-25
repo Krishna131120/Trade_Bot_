@@ -42,6 +42,8 @@ export default function HftPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [liveStatus, setLiveStatus] = useState<any>(null);
     const [connected, setConnected] = useState(false);
+    /** Incremented on Start Bot so analysis panels remount and never show cached/previous output. */
+    const [botRunKey, setBotRunKey] = useState(0);
 
     // SSE stream: connect once and keep alive; also do an initial REST load
     useEffect(() => {
@@ -221,11 +223,12 @@ export default function HftPage() {
             }
             // 3. Start the bot (it now has the user's tickers)
             await hftApiService.startBot();
-            // 4. Optimistically mark as running immediately — backend starts in background
-            // so refreshData won't yet show isRunning:true; we set it here so Stop Bot is clickable
+            // 4. New run: remount analysis panels so they never show cached/previous output
+            setBotRunKey(k => k + 1);
+            // 5. Mark as running so panels show "Processing" until backend finishes
             setBotData(prev => ({ ...prev, isRunning: true }));
-            toast.success('Bot started! Analysis running in background...');
-            // 5. Refresh after a short delay to pick up backend state
+            toast.success('Bot started! Wait for analysis to finish before results appear.');
+            // 6. Refresh after a short delay to pick up backend state
             setTimeout(() => refreshData(), 3000);
         } catch (error) {
             console.error('Error starting bot:', error);
@@ -239,13 +242,14 @@ export default function HftPage() {
         try {
             setLoading(true);
             await hftApiService.stopBot();
-            // Immediately mark as stopped
             setBotData(prev => ({ ...prev, isRunning: false }));
             toast.success('Bot stopped successfully!');
             await refreshData();
         } catch (error) {
             console.error('Error stopping bot:', error);
-            toast.error('Failed to stop bot');
+            // Always mark as stopped so UI is not stuck when backend is down or request fails
+            setBotData(prev => ({ ...prev, isRunning: false }));
+            toast.error('Failed to stop bot (backend may be offline)');
         } finally {
             setLoading(false);
         }
@@ -500,6 +504,7 @@ export default function HftPage() {
                             {activeTab === 'portfolio' && (
                                 <HftPortfolio
                                     botData={botData}
+                                    botRunKey={botRunKey}
                                     onAddTicker={handleAddTicker}
                                     onRemoveTicker={handleRemoveTicker}
                                     onRefresh={refreshData}

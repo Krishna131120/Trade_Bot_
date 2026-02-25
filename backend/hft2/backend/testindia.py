@@ -4124,10 +4124,11 @@ class Stock:
             event_counts = []
             epoch_logs = []
 
+            _br_rl = (lambda: bot_running() if callable(bot_running) else bot_running) if callable(bot_running) else (lambda: bot_running)
             logger.info(f"Training adversarial RL agent...")
             for episode in range(num_episodes):
                 # Check if bot should stop
-                if not bot_running:
+                if not _br_rl():
                     logger.info(
                         "Bot stop signal received, stopping RL training...")
                     break
@@ -4139,7 +4140,7 @@ class Stock:
 
                 while not done:
                     # Check if bot should stop during episode
-                    if not bot_running:
+                    if not _br_rl():
                         logger.info(
                             "Bot stop signal received, stopping RL episode...")
                         break
@@ -4154,7 +4155,7 @@ class Stock:
                         episode_events += 1
 
                 # Break out of episode loop if bot should stop
-                if not bot_running:
+                if not _br_rl():
                     break
 
                 total_rewards.append(total_reward)
@@ -4459,9 +4460,10 @@ class Stock:
 
             logger.info(
                 "Starting adversarial training for LSTM and Transformer...")
+            _br = (lambda: bot_running() if callable(bot_running) else bot_running) if callable(bot_running) else (lambda: bot_running)
             for epoch in range(num_epochs):
                 # Check if bot should stop
-                if not bot_running:
+                if not _br():
                     logger.info(
                         "Bot stop signal received, stopping adversarial training...")
                     break
@@ -4473,7 +4475,7 @@ class Stock:
 
                 for batch_idx, (inputs, labels) in enumerate(train_loader):
                     # Check if bot should stop during batch processing
-                    if not bot_running:
+                    if not _br():
                         logger.info(
                             "Bot stop signal received, stopping batch processing...")
                         break
@@ -4544,7 +4546,7 @@ class Stock:
                     transformer_running_loss += transformer_total_loss.item()
 
                 # Break out of epoch loop if bot should stop
-                if not bot_running:
+                if not _br():
                     break
 
                 # INDUSTRY LEVEL: Calculate epoch losses and update schedulers
@@ -4567,7 +4569,7 @@ class Stock:
                     patience_counter += 1
 
                 # Check if bot should stop after epoch (before logging)
-                if not bot_running:
+                if not _br():
                     logger.info(
                         f"[STOP] Bot stop signal received, stopping ML training after epoch {epoch+1}...")
                     break
@@ -4679,9 +4681,11 @@ class Stock:
             }
 
     def analyze_stock(self, ticker, benchmark_tickers=None, prediction_days=30, training_period="2y", bot_running=True):
+        def _br():
+            return bot_running() if callable(bot_running) else bot_running
         try:
             # Check if bot should stop before starting analysis
-            if not bot_running:
+            if not _br():
                 logger.info(
                     f"Bot stop signal received, skipping analysis for {ticker}")
                 return {

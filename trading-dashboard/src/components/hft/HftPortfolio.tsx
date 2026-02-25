@@ -437,6 +437,8 @@ const OrderModalActions = styled.div`
 
 interface HftPortfolioProps {
     botData: HftBotData;
+    /** Incremented on Start Bot so analysis panels remount and never show cached output. */
+    botRunKey?: number;
     onAddTicker: (ticker: string) => Promise<void>;
     onRemoveTicker: (ticker: string) => Promise<void>;
     onRefresh?: () => Promise<void>;
@@ -444,7 +446,7 @@ interface HftPortfolioProps {
 
 type OrderSide = 'BUY' | 'SELL';
 
-const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRemoveTicker, onRefresh }) => {
+const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, botRunKey = 0, onAddTicker, onRemoveTicker, onRefresh }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
     const { user } = useAuth();
@@ -793,7 +795,7 @@ const HftPortfolio: React.FC<HftPortfolioProps> = ({ botData, onAddTicker, onRem
                                 )}
                                 {userWatchlist.map(ticker => (
                                     <HftAnalysisPanel
-                                        key={ticker}
+                                        key={`${ticker}-${botRunKey}`}
                                         symbol={ticker}
                                         active={botData.isRunning}
                                     />

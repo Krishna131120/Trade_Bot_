@@ -616,6 +616,11 @@ bot_running = False
 _continuous_loop_task: asyncio.Task = None  # Background continuous analysis loop
 
 
+def get_bot_running() -> bool:
+    """Return current bot_running so heavy analysis can check it (e.g. when user clicks Stop)."""
+    return bot_running
+
+
 # ── Bot-data cache (stale-while-revalidate) ─────────────────────────────────
 # Stores the last successful /api/bot-data response so slow Dhan/Fyers fetches
 # never block the frontend. A background task keeps it fresh every 20 seconds.
@@ -3969,197 +3974,119 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
         _emit({"type": "log", "level": level, "message": msg})
 
     async def run_analysis():
-        """Run the full pipeline in executor, emitting events at each step."""
+        """Run the heavy ML pipeline (stock_analyzer.analyze_stock) and emit result only when done.
+        User must wait; Stop Bot is respected via get_bot_running()."""
         loop = asyncio.get_event_loop()
         sym = symbol.strip().upper()
-        indicators: dict = {}
 
         try:
-            _emit({"type": "progress", "step": "Initializing analysis", "pct": 2})
-            _log_emit("INFO", f"🚀 Starting full HFT2 analysis for {sym}...")
+            _emit({"type": "progress", "step": "Starting full analysis (may take a few minutes)", "pct": 5})
+            _log_emit("INFO", f"🚀 Running heavy ML pipeline for {sym} — please wait...")
 
-            # ── Step 1: Yahoo Finance historical data ─────────────────
-            _emit({"type": "progress", "step": "Fetching market data", "pct": 10})
-            hist_data = None
+            if not trading_bot or not getattr(trading_bot, "stock_analyzer", None):
+                _log_emit("WARNING", "Stock analyzer not available — ensure bot is started first.")
+                _emit({"type": "error", "message": "Stock analyzer not available"})
+                return
+
+            _emit({"type": "progress", "step": "Training models & ML pipeline", "pct": 20})
+            _log_emit("INFO", "Training models, sentiment, and adversarial ML...")
+
+            def run_heavy():
+                return trading_bot.stock_analyzer.analyze_stock(sym, bot_running=get_bot_running)
+
             try:
-                import yfinance as yf
-                def _fetch_hist(s):
-                    t = yf.Ticker(s)
-                    return t.history(period="3mo")
-                hist_data = await asyncio.wait_for(
-                    loop.run_in_executor(None, _fetch_hist, sym), timeout=20.0
+                raw = await asyncio.wait_for(
+                    loop.run_in_executor(None, run_heavy),
+                    timeout=600.0
                 )
-                if hist_data is not None and not hist_data.empty:
-                    _log_emit("INFO", f"✅ Fetched {len(hist_data)} days historical data for {sym}")
-                else:
-                    _log_emit("WARNING", f"⚠️ No historical data returned for {sym}")
             except asyncio.TimeoutError:
-                _log_emit("WARNING", "⚠️ Historical data fetch timed out (>20s)")
-            except Exception as e:
-                _log_emit("WARNING", f"⚠️ Historical data error: {e}")
+                _log_emit("ERROR", "Analysis timed out (10 min)")
+                _emit({"type": "error", "message": "Analysis timed out"})
+                return
+            except asyncio.CancelledError:
+                _log_emit("INFO", "Analysis cancelled (Stop Bot)")
+                _emit({"type": "result", "data": {
+                    "symbol": sym,
+                    "recommendation": "HOLD",
+                    "confidence": 0.0,
+                    "reasoning": "Analysis was stopped.",
+                    "risk_score": 0.5,
+                    "target_price": None,
+                    "stop_loss": None,
+                    "sentiment": "neutral",
+                    "sentiment_score": 0.0,
+                    "indicators": {},
+                    "timestamp": datetime.now().isoformat(),
+                }})
+                return
 
-            # ── Step 2: Compute technical indicators ──────────────────
-            _emit({"type": "progress", "step": "Computing technical indicators", "pct": 28})
-            if hist_data is not None and not hist_data.empty:
-                try:
-                    import pandas as pd
-                    closes = hist_data["Close"]
-                    highs  = hist_data["High"]
-                    lows   = hist_data["Low"]
+            if not raw or not raw.get("success"):
+                msg = raw.get("message", "Analysis failed or was stopped") if isinstance(raw, dict) else "Analysis failed"
+                _log_emit("WARNING", msg)
+                _emit({"type": "result", "data": {
+                    "symbol": sym,
+                    "recommendation": "HOLD",
+                    "confidence": 0.0,
+                    "reasoning": msg,
+                    "risk_score": 0.5,
+                    "target_price": None,
+                    "stop_loss": None,
+                    "sentiment": "neutral",
+                    "sentiment_score": 0.0,
+                    "indicators": {},
+                    "timestamp": datetime.now().isoformat(),
+                }})
+                return
 
-                    # RSI (14)
-                    delta = closes.diff()
-                    gain  = delta.clip(lower=0).rolling(14).mean()
-                    loss  = (-delta.clip(upper=0)).rolling(14).mean()
-                    rs    = gain / loss.replace(0, float('nan'))
-                    rsi_val = float(100 - 100 / (1 + rs.iloc[-1])) if loss.iloc[-1] != 0 else 50.0
-                    rsi_sig = "bullish" if rsi_val < 40 else ("bearish" if rsi_val > 65 else "neutral")
-                    indicators["RSI"] = {"value": round(rsi_val, 2), "signal": rsi_sig}
-                    _emit({"type": "indicator", "name": "RSI (14)", "value": round(rsi_val, 2), "signal": rsi_sig})
-                    _log_emit("INFO", f"📊 RSI(14) = {rsi_val:.2f} → {rsi_sig}")
-
-                    # MACD
-                    ema12 = closes.ewm(span=12, adjust=False).mean()
-                    ema26 = closes.ewm(span=26, adjust=False).mean()
-                    macd_line  = ema12 - ema26
-                    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-                    macd_val   = float(macd_line.iloc[-1])
-                    sig_val    = float(signal_line.iloc[-1])
-                    macd_sig   = "bullish" if macd_val > sig_val else "bearish"
-                    indicators["MACD"] = {"value": round(macd_val, 4), "signal_line": round(sig_val, 4), "signal": macd_sig}
-                    _emit({"type": "indicator", "name": "MACD", "value": round(macd_val, 4), "signal": macd_sig})
-                    _log_emit("INFO", f"📊 MACD = {macd_val:.4f} | Signal = {sig_val:.4f} → {macd_sig}")
-
-                    # EMA 20 vs price
-                    ema20  = float(closes.ewm(span=20, adjust=False).mean().iloc[-1])
-                    price  = float(closes.iloc[-1])
-                    ema_sig = "bullish" if price > ema20 else "bearish"
-                    indicators["EMA20"] = {"value": round(ema20, 2), "price": round(price, 2), "signal": ema_sig}
-                    _emit({"type": "indicator", "name": "EMA (20)", "value": round(ema20, 2), "signal": ema_sig})
-                    _log_emit("INFO", f"📊 EMA20 = ₹{ema20:.2f} | Price = ₹{price:.2f} → {ema_sig}")
-
-                    # Bollinger Bands (20, 2σ)
-                    sma20  = closes.rolling(20).mean()
-                    std20  = closes.rolling(20).std()
-                    upper  = float((sma20 + 2 * std20).iloc[-1])
-                    lower  = float((sma20 - 2 * std20).iloc[-1])
-                    bb_sig = "oversold" if price < lower else ("overbought" if price > upper else "neutral")
-                    indicators["BB"] = {"upper": round(upper, 2), "lower": round(lower, 2), "signal": bb_sig}
-                    _emit({"type": "indicator", "name": "Bollinger Bands", "value": f"₹{lower:.0f}–₹{upper:.0f}", "signal": bb_sig})
-                    _log_emit("INFO", f"📊 BB: ₹{lower:.2f}–₹{upper:.2f} | Price ₹{price:.2f} → {bb_sig}")
-
-                    # Volume trend
-                    avg_vol = float(hist_data["Volume"].rolling(20).mean().iloc[-1])
-                    cur_vol = float(hist_data["Volume"].iloc[-1])
-                    vol_sig = "high" if cur_vol > avg_vol * 1.3 else ("low" if cur_vol < avg_vol * 0.7 else "normal")
-                    indicators["Volume"] = {"current": int(cur_vol), "avg_20d": int(avg_vol), "signal": vol_sig}
-                    _emit({"type": "indicator", "name": "Volume Trend", "value": f"{int(cur_vol):,}", "signal": vol_sig})
-                    _log_emit("INFO", f"📊 Volume = {int(cur_vol):,} vs 20D avg {int(avg_vol):,} → {vol_sig}")
-
-                except Exception as ind_err:
-                    _log_emit("WARNING", f"⚠️ Indicator calculation error: {ind_err}")
-
-            # ── Step 3: News sentiment ────────────────────────────────
-            _emit({"type": "progress", "step": "Analyzing news sentiment", "pct": 48})
-            sentiment_score = 0.0
-            sentiment_label = "neutral"
-            try:
-                from news_sentiment import get_indian_news_sentiment
-                sent = await asyncio.wait_for(
-                    loop.run_in_executor(None, get_indian_news_sentiment, sym),
-                    timeout=12.0  # Hard cap: don't let news search freeze the UI
-                )
-                if isinstance(sent, dict):
-                    sentiment_score = float(sent.get("score", 0))
-                    sentiment_label = sent.get("label", "neutral")
-                elif isinstance(sent, (int, float)):
-                    sentiment_score = float(sent)
-                    sentiment_label = "positive" if sentiment_score > 0.1 else ("negative" if sentiment_score < -0.1 else "neutral")
-                _emit({"type": "indicator", "name": "News Sentiment", "value": round(sentiment_score, 3), "signal": sentiment_label})
-                _log_emit("INFO", f"📰 News sentiment for {sym}: {sentiment_label} ({sentiment_score:.3f})")
-            except asyncio.TimeoutError:
-                _log_emit("WARNING", "⚠️ News sentiment timed out")
-            except Exception as sent_err:
-                _log_emit("WARNING", f"⚠️ News sentiment unavailable: {sent_err}")
-
-            # ── Step 4: ML prediction ─────────────────────────────────
-            _emit({"type": "progress", "step": "Running ML prediction", "pct": 65})
-            prediction_result = None
-            if MCP_AVAILABLE:
-                try:
-                    await _ensure_mcp_initialized()
-                    if mcp_trading_agent:
-                        from mcp_server.tools.prediction_tool import PredictionTool
-                        pt = PredictionTool({
-                            "tool_id": "prediction_tool",
-                            "ollama_enabled": True,
-                            "ollama_host": "http://localhost:11434",
-                            "ollama_model": "llama3.1:8b"
-                        })
-                        session_id = str(int(asyncio.get_event_loop().time() * 1_000_000))
-                        res = await asyncio.wait_for(
-                            pt.rank_predictions({"symbols": [sym], "models": ["rl"], "horizon": "day", "include_explanations": True}, session_id),
-                            timeout=60.0
-                        )
-                        if res.status == "SUCCESS":
-                            prediction_result = res.data
-                            _log_emit("INFO", f"✅ ML prediction complete for {sym}")
-                        else:
-                            _log_emit("WARNING", f"⚠️ ML prediction returned: {res.status}")
-                except asyncio.TimeoutError:
-                    _log_emit("WARNING", "⚠️ ML prediction timed out (>60s)")
-                except Exception as pe:
-                    _log_emit("WARNING", f"⚠️ ML prediction failed: {pe}")
+            stock_data = raw.get("stock_data") or {}
+            tech = raw.get("technical_indicators") or {}
+            ml = raw.get("ml_analysis") or {}
+            rec_raw = (raw.get("recommendation") or "HOLD").upper()
+            if "BUY" in rec_raw or "STRONG BUY" in rec_raw:
+                recommendation = "BUY"
+            elif "SELL" in rec_raw or "STRONG SELL" in rec_raw:
+                recommendation = "SELL"
             else:
-                _log_emit("INFO", "ℹ️ MCP not available — skipping ML prediction")
-
-            # ── Step 5: Decision signal ───────────────────────────────
-            _emit({"type": "progress", "step": "Generating trading signal", "pct": 82})
-            recommendation = "HOLD"
-            confidence     = 0.5
-            reasoning      = "Based on technical analysis"
-            risk_score     = 0.5
-            target_price   = None
+                recommendation = "HOLD"
+            confidence = float(ml.get("confidence", 0.5))
+            if confidence > 1.0:
+                confidence = confidence / 100.0
+            current_price = float(stock_data.get("current_price") or 0)
+            support = float(stock_data.get("support_level") or 0)
+            resistance = float(stock_data.get("resistance_level") or 0)
+            target_price = None
             stop_loss_price = None
+            if ml.get("predicted_price"):
+                target_price = round(float(ml["predicted_price"]), 2)
+            elif resistance and current_price:
+                target_price = round(resistance, 2)
+            if support and current_price:
+                stop_loss_price = round(support, 2)
+            if not stop_loss_price and current_price:
+                stop_loss_price = round(current_price * 0.97, 2)
+            reasoning = (raw.get("technical_analysis") or {}).get("explanation") or raw.get("explanation") or "Full ML analysis complete."
+            sentiment_data = raw.get("sentiment_analysis") or {}
+            if isinstance(sentiment_data, dict):
+                sentiment_score = float(sentiment_data.get("score", sentiment_data.get("compound", 0)))
+                sentiment_label = sentiment_data.get("label", "neutral")
+            else:
+                sentiment_score = 0.0
+                sentiment_label = "neutral"
+            indicators = {}
+            if tech.get("rsi") is not None:
+                rsi_v = float(tech["rsi"])
+                indicators["RSI"] = {"value": round(rsi_v, 2), "signal": "bearish" if rsi_v > 65 else ("bullish" if rsi_v < 40 else "neutral")}
+            if tech.get("macd") is not None:
+                indicators["MACD"] = {"value": round(float(tech["macd"]), 4), "signal": "bullish" if float(tech.get("macd", 0)) > 0 else "bearish"}
+            if tech.get("sma_50") is not None and current_price:
+                indicators["EMA20"] = {"value": round(float(tech.get("sma_50", 0)), 2), "signal": "bullish" if current_price > float(tech["sma_50"]) else "bearish"}
 
-            analysis_result = _last_bot_analysis.get(sym)
-            if analysis_result:
-                recommendation  = analysis_result.get("recommendation", "HOLD")
-                confidence      = analysis_result.get("confidence", 0.5)
-                reasoning       = analysis_result.get("reasoning", reasoning)
-                risk_score      = analysis_result.get("risk_score", 0.5)
-                target_price    = analysis_result.get("target_price")
-                stop_loss_price = analysis_result.get("stop_loss")
-                _log_emit("INFO", f"✅ Signal from MCP: {recommendation} | Confidence: {confidence:.1%}")
-            elif indicators:
-                # Fallback: derive signal from indicators
-                bull  = sum(1 for v in indicators.values() if isinstance(v, dict) and v.get("signal") in ("bullish", "oversold", "high", "positive"))
-                bear  = sum(1 for v in indicators.values() if isinstance(v, dict) and v.get("signal") in ("bearish", "overbought", "negative"))
-                total = max(bull + bear, 1)
-                confidence = round(max(bull, bear) / total, 2)
-                if bull > bear:
-                    recommendation = "BUY"
-                    reasoning = f"Technical indicators bullish: {bull}/{total} signals favor buying"
-                elif bear > bull:
-                    recommendation = "SELL"
-                    reasoning = f"Technical indicators bearish: {bear}/{total} signals favor selling"
-                else:
-                    reasoning = "Mixed signals — no clear directional bias"
-                if indicators.get("RSI"):
-                    rsi_v = indicators["RSI"]["value"]
-                    if hist_data is not None and not hist_data.empty:
-                        cp = float(hist_data["Close"].iloc[-1])
-                        target_price    = round(cp * 1.03, 2) if recommendation == "BUY" else round(cp * 0.97, 2)
-                        stop_loss_price = round(cp * 0.97, 2) if recommendation == "BUY" else round(cp * 1.03, 2)
-                _log_emit("INFO", f"📈 Derived signal: {recommendation} ({confidence:.1%} confidence)")
-
-            # Emit final structured result
             result_payload = {
                 "symbol": sym,
                 "recommendation": recommendation,
-                "confidence": confidence,
-                "reasoning": reasoning,
-                "risk_score": risk_score,
+                "confidence": min(1.0, max(0.0, confidence)),
+                "reasoning": reasoning[:500] if reasoning else "Full ML analysis complete.",
+                "risk_score": 0.5,
                 "target_price": target_price,
                 "stop_loss": stop_loss_price,
                 "sentiment": sentiment_label,
@@ -4167,10 +4094,10 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                 "indicators": indicators,
                 "timestamp": datetime.now().isoformat(),
             }
-            _last_bot_analysis[sym] = {**result_payload, "prediction": prediction_result}
-            _emit({"type": "result", "data": result_payload})
+            _last_bot_analysis[sym] = {**result_payload, "prediction": ml}
             _emit({"type": "progress", "step": "Analysis complete", "pct": 100})
-            _log_emit("INFO", f"✅ Analysis complete for {sym}: {recommendation} ({confidence:.1%})")
+            _emit({"type": "result", "data": result_payload})
+            _log_emit("INFO", f"✅ Heavy analysis complete for {sym}: {recommendation} ({confidence:.1%})")
 
         except Exception as e:
             _log_emit("ERROR", f"❌ Analysis pipeline error: {e}")
@@ -4351,14 +4278,15 @@ async def start_bot_with_symbol(req: StartBotWithSymbolRequest):
 
 @app.post("/api/bot/stop")
 async def stop_bot_endpoint():
-    """Stop the running trading bot."""
+    """Stop the running trading bot and cancel the continuous analysis loop."""
     global trading_bot, bot_running
     try:
+        bot_running = False
+        _stop_continuous_loop()
         if trading_bot:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, trading_bot.stop)
-            bot_running = False
-            logger.info("Bot stopped via API")
+            logger.info("Bot stopped via API (continuous loop cancelled)")
             return {"status": "ok", "message": "Bot stopped"}
         return {"status": "ok", "message": "Bot was not running"}
     except Exception as e:
@@ -5285,6 +5213,8 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
                         logger.info(f"🚀 Bot started in background with {len(tickers_list)} tickers: {tickers_list}")
                         # Start the continuous loop — it will process all tickers sequentially
                         _start_continuous_loop()
+                        global bot_running
+                        bot_running = True
                         logger.info(f"✅ Continuous trading loop task created")
                 except Exception as init_error:
                     logger.error(f"❌ Background bot initialization failed: {init_error}")
@@ -5353,6 +5283,8 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
 
             # Ensure continuous loop is running (start if not already active)
             _start_continuous_loop()
+            global bot_running
+            bot_running = True
 
             if added_tickers:
                 return MessageResponse(message=f"Bot running with {tickers_count} tickers. {len(added_tickers)} new ticker(s) will be analyzed in the next loop cycle.")

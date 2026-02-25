@@ -145,8 +145,8 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
 
         es.onerror = () => {
             setConnecting(false);
-            if (!doneRef.current) {
-                // Don't show error — backend is processing. Auto-retry after 5s.
+            // If user stopped the bot (active=false), startRef is cleared — don't retry.
+            if (!doneRef.current && startRef.current) {
                 retryTimerRef.current = setTimeout(() => {
                     if (!doneRef.current && startRef.current) {
                         startStream();
@@ -175,6 +175,10 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
             startRef.current = false;
             doneRef.current = false;
             if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+            setResult(null);
+            setDone(false);
+            setProgress(null);
+            setError(null);
         }
         return () => {
             if (esRef.current) { esRef.current.close(); esRef.current = null; }
