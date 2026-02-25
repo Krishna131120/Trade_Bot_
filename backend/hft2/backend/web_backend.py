@@ -639,13 +639,14 @@ async def _refresh_bot_data_cache_background():
             current_mode = trading_bot.config.get("mode", saved_mode)
             if current_mode == "live":
                 try:
-                    from dhan_client import get_live_portfolio
-                    loop = asyncio.get_event_loop()
-                    dhan_portfolio = await asyncio.wait_for(
-                        loop.run_in_executor(None, get_live_portfolio), timeout=25.0
-                    )
-                    if dhan_portfolio:
-                        result = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
+                    from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
+                    if get_dhan_token() and get_dhan_client_id():
+                        loop = asyncio.get_event_loop()
+                        dhan_portfolio = await asyncio.wait_for(
+                            loop.run_in_executor(None, get_live_portfolio), timeout=25.0
+                        )
+                        if dhan_portfolio:
+                            result = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
                 except Exception:
                     pass
             if result is None:
@@ -658,13 +659,14 @@ async def _refresh_bot_data_cache_background():
                     pass
         if result is None and saved_mode == "live":
             try:
-                from dhan_client import get_live_portfolio
-                loop = asyncio.get_event_loop()
-                dhan_portfolio = await asyncio.wait_for(
-                    loop.run_in_executor(None, get_live_portfolio), timeout=25.0
-                )
-                if dhan_portfolio:
-                    result = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
+                from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
+                if get_dhan_token() and get_dhan_client_id():
+                    loop = asyncio.get_event_loop()
+                    dhan_portfolio = await asyncio.wait_for(
+                        loop.run_in_executor(None, get_live_portfolio), timeout=25.0
+                    )
+                    if dhan_portfolio:
+                        result = _convert_dhan_portfolio_to_bot_data(dhan_portfolio, include_config=True)
             except Exception:
                 pass
         if result:
@@ -2361,17 +2363,26 @@ class WebTradingBot:
             logger.debug(f"get_portfolio_metrics: current_mode={current_mode}")
             
             if current_mode == "live":
-                # CRITICAL: Fetch REAL-TIME data directly from Dhan API first (not cached database)
-                # Note: This is called from get_complete_bot_data() which runs in executor
-                # If Dhan API is slow, the endpoint-level fetch (in get_bot_data) should handle it
-                logger.info("🔄 Live mode: Fetching REAL-TIME data from Dhan API...")
-                
-                # PRIMARY: Fetch directly from Dhan API for real-time data
-                # Use a quick version without Fyers LTP updates to avoid blocking
+                # Per-user credentials come from MongoDB at request time (get_bot_data uses demat).
+                # Here we have no request context; only use env if set (legacy). Never show another account's DB cache.
                 try:
-                    from dhan_client import get_live_portfolio
-                    # get_live_portfolio() may be slow due to Fyers LTP calls
-                    # But we'll try it anyway - if it times out, endpoint will handle fallback
+                    from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
+                    token = get_dhan_token()
+                    cid = get_dhan_client_id()
+                except Exception:
+                    token, cid = None, None
+                if not token or not cid:
+                    # No env credentials: do not use DB fallback (would show previous account). Return empty.
+                    logger.debug("Live mode: no env Dhan credentials; returning empty portfolio (per-user demat used at request time)")
+                    return {
+                        "total_value": 0.0, "cash": 0.0, "cash_percentage": 100.0, "holdings": {},
+                        "total_invested": 0.0, "invested_percentage": 0.0, "current_holdings_value": 0.0,
+                        "total_return": 0.0, "total_return_pct": 0.0, "unrealized_pnl": 0.0, "unrealized_pnl_pct": 0.0,
+                        "realized_pnl": 0.0, "realized_pnl_pct": 0.0, "total_exposure": 0.0, "exposure_ratio": 0.0,
+                        "profit_loss": 0.0, "profit_loss_pct": 0.0, "positions": 0, "trades_today": 0, "initial_balance": 0.0
+                    }
+                logger.info("🔄 Live mode: Fetching REAL-TIME data from Dhan API (env)...")
+                try:
                     dhan_portfolio = get_live_portfolio()
                     if dhan_portfolio:
                         logger.info(f"✅ Fetched REAL-TIME portfolio from Dhan API: cash={dhan_portfolio.get('cash', 0)}, holdings={len(dhan_portfolio.get('holdings', {}))}")
@@ -2414,12 +2425,21 @@ class WebTradingBot:
                             "initial_balance": round(starting_balance, 2)
                         }
                     else:
-                        logger.warning("⚠️ Dhan API returned None - falling back to database")
+                        logger.warning("⚠️ Dhan API returned None - not using cached DB (per-user demat only)")
                 except Exception as dhan_fetch_err:
-                    logger.warning(f"⚠️ Failed to fetch REAL-TIME data from Dhan API: {dhan_fetch_err} - falling back to database")
-                
-                # FALLBACK: If Dhan API fails, try database (but log that it's cached data)
-                if hasattr(self, "portfolio_manager") and self.portfolio_manager:
+                    logger.warning(f"⚠️ Dhan API failed: {dhan_fetch_err} - not using cached DB")
+                # Do not fall back to database in live mode - would show another user's cached account.
+                # Return empty so only per-user demat (from API requests) is used.
+                logger.debug("Live mode: returning empty portfolio (use per-user demat from API)")
+                return {
+                    "total_value": 0.0, "cash": 0.0, "cash_percentage": 100.0, "holdings": {},
+                    "total_invested": 0.0, "invested_percentage": 0.0, "current_holdings_value": 0.0,
+                    "total_return": 0.0, "total_return_pct": 0.0, "unrealized_pnl": 0.0, "unrealized_pnl_pct": 0.0,
+                    "realized_pnl": 0.0, "realized_pnl_pct": 0.0, "total_exposure": 0.0, "exposure_ratio": 0.0,
+                    "profit_loss": 0.0, "profit_loss_pct": 0.0, "positions": 0, "trades_today": 0, "initial_balance": 0.0
+                }
+                # Legacy DB fallback removed for live mode (multi-tenant: per-user demat only)
+                if False and hasattr(self, "portfolio_manager") and self.portfolio_manager:
                     try:
                         session = self.portfolio_manager.db.Session()
                         try:
@@ -3149,8 +3169,11 @@ def load_config_from_file(mode: str) -> dict:
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
                 config_data = json.load(f)
-                logger.info(f"Loaded configuration from {config_file}")
-                return config_data
+            # Never use persisted Dhan credentials; per-user demat from MongoDB only
+            config_data.pop("dhan_client_id", None)
+            config_data.pop("dhan_access_token", None)
+            logger.info(f"Loaded configuration from {config_file}")
+            return config_data
         else:
             logger.info(f"Config file {config_file} not found, using defaults")
             return {}

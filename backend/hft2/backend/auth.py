@@ -195,10 +195,13 @@ def get_user_demat(username: str) -> Optional[dict]:
 
 
 def set_user_demat(username: str, broker: str, client_id: str, access_token: str) -> bool:
-    """Save or update demat credentials for user. Returns True only when a user document was found and updated."""
+    """Save or update demat credentials for user. Returns True only when a user document was found and updated.
+    Stored in MongoDB: database 'trading', collection 'users', on the document with username (lowercase).
+    Fields set: demat_broker, demat_client_id, demat_access_token, demat_updated_at."""
     try:
         col = _get_users_collection()
         if col is None:
+            logger.warning("set_user_demat: users collection is None (MongoDB unavailable)")
             return False
         normalized = username.lower().strip()
         result = col.update_one(
@@ -211,6 +214,10 @@ def set_user_demat(username: str, broker: str, client_id: str, access_token: str
             }},
             upsert=False,
         )
+        if result.matched_count > 0:
+            logger.info(f"set_user_demat: saved for username={normalized!r} in trading.users (modified_count={result.modified_count})")
+        else:
+            logger.warning(f"set_user_demat: no document matched username={normalized!r} in trading.users (user may not exist)")
         return result.matched_count > 0
     except Exception as e:
         logger.error(f"set_user_demat failed: {e}")

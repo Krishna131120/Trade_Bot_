@@ -96,17 +96,9 @@ class TradingConfig(BaseModel):
 
     @root_validator(skip_on_failure=True)
     def validate_live_trading_requirements(cls, values):
-        """Validate that live trading has required credentials"""
-        mode = values.get('mode')
-        client_id = values.get('dhan_client_id')
-        access_token = values.get('dhan_access_token')
-
-        if mode == TradingMode.LIVE:
-            if not client_id or not access_token:
-                raise ValueError(
-                    "Live trading mode requires dhan_client_id and dhan_access_token to be set"
-                )
-
+        """Live mode is allowed without config credentials; per-user demat from MongoDB is used at runtime."""
+        # Do not require dhan_client_id/dhan_access_token in config for live mode.
+        # Credentials come from each user's linked demat (MongoDB) when they use the app.
         return values
 
     @root_validator(skip_on_failure=True)
