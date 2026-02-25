@@ -476,10 +476,24 @@ try:
         """Dependency: returns JWT payload or raises 401."""
         if not credentials or not credentials.credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
+        if credentials.credentials in _logout_blacklist:
+            raise HTTPException(status_code=401, detail="Token invalidated (logged out)")
         payload = auth_module.decode_token(credentials.credentials)
         if not payload:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         return payload
+
+    def get_optional_user_demat(credentials: HTTPAuthorizationCredentials = Depends(_http_bearer)):
+        """Dependency: returns (payload, demat_creds). demat_creds is None if not auth or no demat linked."""
+        if not credentials or not credentials.credentials:
+            return (None, None)
+        payload = auth_module.decode_token(credentials.credentials)
+        if not payload:
+            return (None, None)
+        username = (payload.get("sub") or "").strip()
+        demat = auth_module.get_user_demat(username) if hasattr(auth_module, "get_user_demat") else None
+        return (payload, demat)
+
     JWT_AVAILABLE = True
     get_optional_user = get_current_user  # Optional auth: returns payload or None
 except Exception as e:
@@ -490,7 +504,13 @@ except Exception as e:
     def get_optional_user():
         return None
 
+    def get_optional_user_demat(credentials=None):
+        return (None, None)
+
 # Logger already configured above
+
+# Logout blacklist: tokens added here are rejected until server restart (client must discard token)
+_logout_blacklist = set()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -705,6 +725,8 @@ _last_bot_analysis: dict = {}
 
 # Per-user bot start: tickers for the user who triggered start (when auth present)
 _pending_start_tickers: list = []
+# Per-user bot start: user_id + demat credentials for the user who triggered start (when auth + demat linked)
+_pending_bot_user_context: Optional[dict] = None
 
 # Module-level flag to prevent double-initialization (replaces fragile function-attribute pattern)
 _bot_initializing: bool = False
@@ -1501,9 +1523,9 @@ class WebTradingBot:
         logger.info(
             f"  Full config keys in WebTradingBot: {list(self.config.keys())}")
 
-        # Initialize dual portfolio manager
+        # Initialize dual portfolio manager (optionally scoped by user_id when set)
         if LIVE_TRADING_AVAILABLE:
-            self.portfolio_manager = DualPortfolioManager()
+            self.portfolio_manager = DualPortfolioManager(user_id=config.get("user_id"))
             self.portfolio_manager.switch_mode(config.get("mode", "paper"))
         else:
             self.portfolio_manager = None
@@ -2402,7 +2424,7 @@ class WebTradingBot:
                         session = self.portfolio_manager.db.Session()
                         try:
                             from db.database import Portfolio, Holding
-                            portfolio = session.query(Portfolio).filter_by(mode='live').first()
+                            portfolio = session.query(Portfolio).filter_by(**self.portfolio_manager._portfolio_filter("live")).first()
                             if portfolio:
                                 holdings_query = session.query(Holding).filter_by(portfolio_id=portfolio.id).all()
                                 
@@ -2985,6 +3007,53 @@ def get_current_saved_mode() -> str:
     return os.getenv("MODE", "paper")
 
 
+def _dhan_portfolio_to_metrics(dhan_portfolio: dict) -> dict:
+    """Build PortfolioMetrics-shaped dict from get_live_portfolio() result (for per-user demat)."""
+    cash = float(dhan_portfolio.get("cash", 0))
+    holdings_raw = dhan_portfolio.get("holdings", {})
+    holdings = {}
+    total_invested = 0.0
+    for ticker, h in holdings_raw.items():
+        qty = float(h.get("quantity", 0))
+        avg = float(h.get("avgPrice", 0))
+        cur = float(h.get("currentPrice", avg))
+        if qty > 0:
+            cost = qty * avg
+            total_invested += cost
+            holdings[ticker] = {"qty": qty, "avg_price": avg, "current_price": cur, "current_value": qty * cur}
+    current_holdings_value = sum(h.get("current_value", 0) for h in holdings.values())
+    total_value = cash + current_holdings_value
+    total_return = current_holdings_value - total_invested
+    total_return_pct = (total_return / total_invested * 100) if total_invested else 0
+    unrealized_pnl = total_return
+    unrealized_pnl_pct = total_return_pct
+    cash_pct = (cash / total_value * 100) if total_value else 0
+    invested_pct = (total_invested / total_value * 100) if total_value else 0
+    return {
+        "total_value": round(total_value, 2),
+        "cash": round(cash, 2),
+        "cash_percentage": round(cash_pct, 2),
+        "holdings": holdings,
+        "total_invested": round(total_invested, 2),
+        "invested_percentage": round(invested_pct, 2),
+        "current_holdings_value": round(current_holdings_value, 2),
+        "total_return": round(total_return, 2),
+        "return_percentage": round(total_return_pct, 2),
+        "total_return_pct": round(total_return_pct, 2),
+        "unrealized_pnl": round(unrealized_pnl, 2),
+        "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
+        "realized_pnl": 0,
+        "realized_pnl_pct": 0,
+        "total_exposure": round(current_holdings_value, 2),
+        "exposure_ratio": round((current_holdings_value / total_value) if total_value else 0, 4),
+        "profit_loss": round(total_return, 2),
+        "profit_loss_pct": round(total_return_pct, 2),
+        "positions": len(holdings),
+        "trades_today": 0,
+        "initial_balance": round(total_value, 2),
+    }
+
+
 def _convert_dhan_portfolio_to_bot_data(dhan_portfolio: dict, include_config: bool = True) -> dict:
     """Helper function to convert Dhan portfolio dict to bot data format. Reduces code duplication."""
     cash = float(dhan_portfolio.get("cash", 0))
@@ -3214,6 +3283,21 @@ def initialize_bot():
                             f"Stop Loss={config['stop_loss_pct']*100:.1f}%, "
                             f"Max Allocation={config['max_capital_per_trade']*100:.1f}%")
 
+        # Per-user: merge pending user context (set by /api/start when user has demat linked)
+        try:
+            pending = globals().get("_pending_bot_user_context")
+            if pending and isinstance(pending, dict):
+                if pending.get("user_id"):
+                    config["user_id"] = pending["user_id"]
+                if pending.get("dhan_client_id"):
+                    config["dhan_client_id"] = pending["dhan_client_id"]
+                if pending.get("dhan_access_token"):
+                    config["dhan_access_token"] = pending["dhan_access_token"]
+                globals()["_pending_bot_user_context"] = None
+                logger.info(f"Applied pending user context for bot init: user_id={config.get('user_id')}")
+        except Exception as e:
+            logger.warning(f"Could not apply pending user context: {e}")
+
         # Debug logging for config
         logger.info(f"Config before WebTradingBot initialization:")
         logger.info(f"  Mode: {config.get('mode')}")
@@ -3328,6 +3412,15 @@ if JWT_AVAILABLE:
         except Exception as e:
             logger.error(f"Unexpected error during login: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error during login")
+
+    @app.post("/api/auth/logout")
+    async def auth_logout(credentials: HTTPAuthorizationCredentials = Depends(_http_bearer)):
+        """Logout: invalidate current token. Client must discard token and clear local state."""
+        if credentials and credentials.credentials and credentials.credentials not in ("", "no-auth-required"):
+            _logout_blacklist.add(credentials.credentials)
+            if len(_logout_blacklist) > 10000:
+                _logout_blacklist.clear()
+        return {"message": "Logged out successfully"}
 
     @app.post("/api/auth/register")
     async def auth_register(req: RegisterRequest):
@@ -3527,6 +3620,52 @@ if JWT_AVAILABLE:
         except Exception:
             logger.exception("save_user_alerts error")
             raise HTTPException(status_code=503, detail="Database unavailable")
+
+    # -------------------------------------------------------------------
+    # Per-User Demat (broker) credentials - link account, refresh token
+    # -------------------------------------------------------------------
+    class DematSaveRequest(BaseModel):
+        broker: str = "dhan"
+        client_id: str
+        access_token: str
+
+    class DematRefreshRequest(BaseModel):
+        access_token: str
+
+    @app.get("/api/user/demat")
+    async def get_user_demat_status(payload: dict = Depends(get_current_user_required)):
+        """Return whether user has demat linked (no secrets)."""
+        username = (payload.get("sub") or "").strip()
+        demat = auth_module.get_user_demat(username) if hasattr(auth_module, "get_user_demat") else None
+        if not demat:
+            return {"linked": False}
+        return {"linked": True, "broker": demat.get("broker", "dhan"), "client_id_masked": (demat.get("client_id", "")[:4] + "***") if demat.get("client_id") else None}
+
+    @app.post("/api/user/demat")
+    async def save_user_demat(req: DematSaveRequest, payload: dict = Depends(get_current_user_required)):
+        """Save or update demat credentials (any broker). Client ID + Access Token linked to this user only."""
+        username = (payload.get("sub") or "").strip()
+        if not username:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        normalized = username.lower().strip()
+        user_exists = auth_module.get_user_by_username(normalized) if hasattr(auth_module, "get_user_by_username") else None
+        if not user_exists:
+            raise HTTPException(status_code=404, detail="User account not found. Please log out and sign in again.")
+        ok = auth_module.set_user_demat(username, req.broker or "dhan", req.client_id or "", req.access_token or "") if hasattr(auth_module, "set_user_demat") else False
+        if not ok:
+            raise HTTPException(status_code=503, detail="Failed to save demat credentials")
+        return {"success": True, "message": "Demat account linked"}
+
+    @app.put("/api/user/demat/token")
+    async def refresh_user_demat_token(req: DematRefreshRequest, payload: dict = Depends(get_current_user_required)):
+        """Update only the access token for the same user (e.g. after 24h refresh)."""
+        username = (payload.get("sub") or "").strip()
+        if not username:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        ok = auth_module.update_user_demat_token(username, req.access_token or "") if hasattr(auth_module, "update_user_demat_token") else False
+        if not ok:
+            raise HTTPException(status_code=503, detail="Failed to update access token")
+        return {"success": True, "message": "Access token updated"}
 
 
 @app.get("/")
@@ -4205,34 +4344,43 @@ async def stop_bot_endpoint():
 
 
 @app.get("/api/bot-data")
-async def get_bot_data():
-    """Get complete bot data for React frontend.
-    Stale-while-revalidate: returns cached data immediately (<1 s) and triggers a
-    background refresh so the next call gets fresher data.  The first ever call
-    waits up to 10 s for a real result so the UI has something meaningful on load.
-    """
+async def get_bot_data(user_demat: tuple = Depends(get_optional_user_demat)):
+    """Get complete bot data for React frontend. When user has demat linked, returns their portfolio (no cache). Logged-in user without demat gets offline data only (no env/cache fallback)."""
     global _bot_data_cache, _bot_data_cache_ts
+    payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+    if demat and demat.get("access_token") and demat.get("client_id"):
+        try:
+            from dhan_client import get_live_portfolio
+            loop = asyncio.get_event_loop()
+            dhan_port = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: get_live_portfolio(access_token=demat["access_token"], client_id=demat["client_id"])),
+                timeout=25.0,
+            )
+            if dhan_port:
+                return _convert_dhan_portfolio_to_bot_data(dhan_port, include_config=True)
+        except asyncio.TimeoutError:
+            logger.warning("Demat bot-data fetch timed out")
+        except Exception as e:
+            logger.warning(f"Demat bot-data fetch failed: {e}")
+        return _offline_bot_data()
+
+    # Logged-in user without linked demat: never show env/cache (other account)
+    if payload is not None:
+        return _offline_bot_data()
+
     try:
         now = _time_module.monotonic()
         cache_age = now - _bot_data_cache_ts
-
         if _bot_data_cache and cache_age < _BOT_DATA_CACHE_TTL:
-            # Cache is fresh — return immediately and skip background work
             return _bot_data_cache
-
         if _bot_data_cache:
-            # Cache is stale — return stale data immediately, refresh in background
             asyncio.ensure_future(_refresh_bot_data_cache_background())
             return _bot_data_cache
-
-        # No cache yet — wait for first fill (up to 10 s) so page doesn't start blank
         await asyncio.wait_for(_refresh_bot_data_cache_background(), timeout=10.0)
         if _bot_data_cache:
             return _bot_data_cache
-
         return _offline_bot_data()
     except asyncio.TimeoutError:
-        logger.warning("First bot-data fill timed out — returning offline payload")
         return _bot_data_cache if _bot_data_cache else _offline_bot_data()
     except Exception as e:
         logger.error(f"Error getting bot data: {e}")
@@ -4241,13 +4389,61 @@ async def get_bot_data():
 
 @app.get("/api/portfolio", response_model=PortfolioMetrics)
 @log_api_call("/api/portfolio", "GET")
-async def get_portfolio():
-    """Get comprehensive portfolio metrics with real-time calculations"""
+async def get_portfolio(user_demat: tuple = Depends(get_optional_user_demat)):
+    """Get comprehensive portfolio metrics. When user has demat linked, uses their broker account; else uses trading_bot."""
     try:
+        payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+        if demat and demat.get("access_token") and demat.get("client_id"):
+            try:
+                from dhan_client import get_live_portfolio
+                loop = asyncio.get_event_loop()
+                dhan_port = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: get_live_portfolio(access_token=demat["access_token"], client_id=demat["client_id"])),
+                    timeout=25.0,
+                )
+                if dhan_port:
+                    metrics = _dhan_portfolio_to_metrics(dhan_port)
+                    return PortfolioMetrics(
+                        total_value=metrics["total_value"],
+                        cash=metrics["cash"],
+                        cash_percentage=metrics["cash_percentage"],
+                        holdings=metrics["holdings"],
+                        total_invested=metrics["total_invested"],
+                        invested_percentage=metrics["invested_percentage"],
+                        current_holdings_value=metrics["current_holdings_value"],
+                        total_return=metrics["total_return"],
+                        return_percentage=metrics["return_percentage"],
+                        total_return_pct=metrics["total_return_pct"],
+                        unrealized_pnl=metrics["unrealized_pnl"],
+                        unrealized_pnl_pct=metrics["unrealized_pnl_pct"],
+                        realized_pnl=metrics["realized_pnl"],
+                        realized_pnl_pct=metrics["realized_pnl_pct"],
+                        total_exposure=metrics["total_exposure"],
+                        exposure_ratio=metrics["exposure_ratio"],
+                        profit_loss=metrics["profit_loss"],
+                        profit_loss_pct=metrics["profit_loss_pct"],
+                        active_positions=metrics["positions"],
+                        trades_today=metrics["trades_today"],
+                        initial_balance=metrics["initial_balance"],
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Demat portfolio fetch timed out")
+            except Exception as e:
+                logger.warning(f"Demat portfolio fetch failed: {e}")
+
+        # Logged-in user without linked demat: do not use trading_bot (env) data
+        if payload is not None:
+            return PortfolioMetrics(
+                total_value=0, cash=0, cash_percentage=0, holdings={},
+                total_invested=0, invested_percentage=0, current_holdings_value=0,
+                total_return=0, return_percentage=0, total_return_pct=0,
+                unrealized_pnl=0, unrealized_pnl_pct=0, realized_pnl=0, realized_pnl_pct=0,
+                total_exposure=0, exposure_ratio=0, profit_loss=0, profit_loss_pct=0,
+                active_positions=0, trades_today=0, initial_balance=0,
+            )
+
         if trading_bot:
             metrics = trading_bot.get_portfolio_metrics()
-
-            # Map metrics to response model with all professional fields
             portfolio_response = {
                 "total_value": metrics.get("total_value", 0),
                 "cash": metrics.get("cash", 0),
@@ -4257,7 +4453,6 @@ async def get_portfolio():
                 "invested_percentage": metrics.get("invested_percentage", 0),
                 "current_holdings_value": metrics.get("current_holdings_value", 0),
                 "total_return": metrics.get("total_return", 0),
-                # Legacy field
                 "return_percentage": metrics.get("total_return_pct", 0),
                 "total_return_pct": metrics.get("total_return_pct", 0),
                 "unrealized_pnl": metrics.get("unrealized_pnl", 0),
@@ -4270,44 +4465,68 @@ async def get_portfolio():
                 "profit_loss_pct": metrics.get("profit_loss_pct", 0),
                 "active_positions": metrics.get("positions", 0),
                 "trades_today": metrics.get("trades_today", 0),
-                "initial_balance": metrics.get("initial_balance", 10000)
+                "initial_balance": metrics.get("initial_balance", 10000),
             }
-
             return PortfolioMetrics(**portfolio_response)
-        else:
-            raise HTTPException(status_code=500, detail="Bot not initialized")
+        raise HTTPException(status_code=500, detail="Bot not initialized and no demat linked")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting portfolio: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/trades")
-async def get_trades(limit: int = 10):
-    """Get recent trades - optimized to avoid blocking"""
+async def get_trades(limit: int = 10, user_demat: tuple = Depends(get_optional_user_demat)):
+    """Get recent trades. When user has demat linked, returns [] (broker may not expose history); else from trading_bot."""
+    payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+    if demat:
+        return []
     try:
         if trading_bot:
-            # Run in executor with timeout to avoid blocking
             loop = asyncio.get_event_loop()
             trades = await asyncio.wait_for(
                 loop.run_in_executor(None, trading_bot.get_recent_trades, limit),
-                timeout=3.0  # 3 second timeout
+                timeout=3.0,
             )
             return trades
-        else:
-            return []
+        return []
     except asyncio.TimeoutError:
-        logger.warning("get_recent_trades timed out - returning empty list")
         return []
     except Exception as e:
         logger.error(f"Error getting trades: {e}")
-        return []  # Return empty list instead of raising exception to prevent frontend errors
+        return []
 
 
 @app.get("/api/portfolio/realtime")
-async def get_realtime_portfolio():
-    """Get real-time portfolio updates with current prices and Dhan sync"""
+async def get_realtime_portfolio(user_demat: tuple = Depends(get_optional_user_demat)):
+    """Get real-time portfolio updates. When user has demat linked, uses their account; else trading_bot + Dhan sync."""
+    payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+    if demat and demat.get("access_token") and demat.get("client_id"):
+        try:
+            from dhan_client import get_live_portfolio
+            loop = asyncio.get_event_loop()
+            dhan_port = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: get_live_portfolio(access_token=demat["access_token"], client_id=demat["client_id"])),
+                timeout=25.0,
+            )
+            if dhan_port:
+                metrics = _dhan_portfolio_to_metrics(dhan_port)
+                current_prices = {}
+                fyers_client = get_fyers_client()
+                for ticker in metrics.get("holdings", {}).keys():
+                    try:
+                        if fyers_client:
+                            symbol_data = fyers_client.get_symbol_data(ticker)
+                            if symbol_data:
+                                current_prices[ticker] = {"price": symbol_data.get("price", 0), "change": symbol_data.get("change", 0), "change_pct": symbol_data.get("change_pct", 0), "volume": symbol_data.get("volume", 0)}
+                    except Exception:
+                        pass
+                return {"portfolio_metrics": metrics, "current_prices": current_prices}
+        except Exception as e:
+            logger.warning(f"Realtime demat fetch failed: {e}")
+
     try:
-        # First, sync with Dhan account if in live mode
         if trading_bot and trading_bot.config.get("mode") == "live":
             try:
                 # Force sync with Dhan account to get latest balance
@@ -4949,19 +5168,22 @@ What would you like to analyze today?""",
 
 @app.post("/api/start", response_model=MessageResponse)
 async def start_bot(payload: dict = Depends(get_optional_user)):
-    """Start the trading bot - returns immediately, runs heavy operations in background. When authenticated, uses that user's watchlist only."""
+    """Start the trading bot - returns immediately, runs heavy operations in background. When authenticated, uses that user's watchlist and demat."""
     try:
-        global trading_bot, _pending_start_tickers
-        # Per-user: when authenticated, set tickers to this user's watchlist so bot runs only their symbols
-        if payload and isinstance(payload, dict):
-            username = payload.get("sub") or ""
-            if username:
-                _pending_start_tickers = _get_user_watchlist_from_db(username)
-                logger.info(f"📊 Bot start: using watchlist for user ({len(_pending_start_tickers)} tickers from MongoDB)")
+        global trading_bot, _pending_start_tickers, _pending_bot_user_context
+        username = (payload.get("sub") or "").strip() if payload and isinstance(payload, dict) else ""
+        if username:
+            _pending_start_tickers = _get_user_watchlist_from_db(username)
+            logger.info(f"📊 Bot start: using watchlist for user ({len(_pending_start_tickers)} tickers from MongoDB)")
+            demat = auth_module.get_user_demat(username) if hasattr(auth_module, "get_user_demat") else None
+            if demat and demat.get("access_token") and demat.get("client_id"):
+                _pending_bot_user_context = {"user_id": username, "dhan_client_id": demat["client_id"], "dhan_access_token": demat["access_token"]}
+                logger.info(f"📊 Bot start: using demat for user {username}")
             else:
-                _pending_start_tickers = []
+                _pending_bot_user_context = None
         else:
             _pending_start_tickers = []
+            _pending_bot_user_context = None
 
         # Initialize bot if not already initialized (start in background, don't wait)
         if not trading_bot:
@@ -5313,8 +5535,9 @@ def save_config_to_file(mode: str, config_data: dict):
 
 
 @app.post("/api/settings", response_model=MessageResponse)
-async def update_settings(request: SettingsRequest):
-    """Update bot settings. When bot not initialized, saves to file for when bot starts."""
+async def update_settings(request: SettingsRequest, user_demat: tuple = Depends(get_optional_user_demat)):
+    """Update bot settings. When bot not initialized, saves to file for when bot starts. Live-mode fetch uses linked demat when available."""
+    payload, request_user_demat = user_demat if isinstance(user_demat, tuple) else (None, None)
     try:
         if trading_bot:
             # Update configuration
@@ -5402,28 +5625,32 @@ async def update_settings(request: SettingsRequest):
             save_config_to_file(current_mode, trading_bot.config)
             set_current_saved_mode(current_mode)
 
-            # If switching to live mode, immediately fetch Dhan credentials and portfolio data
+            # If switching to live mode, immediately fetch Dhan credentials and portfolio data (prefer user's linked demat)
             if current_mode == 'live':
                 async def fetch_dhan_data_immediately():
                     try:
                         logger.info("🔄 Switching to live mode - fetching Dhan account credentials and portfolio data...")
                         loop = asyncio.get_event_loop()
-                        
-                        # First, verify Dhan credentials are loaded from env file
-                        from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
-                        token = get_dhan_token()
-                        client_id = get_dhan_client_id()
-                        
+                        from dhan_client import get_live_portfolio
+                        token, client_id = None, None
+                        if request_user_demat and request_user_demat.get("access_token") and request_user_demat.get("client_id"):
+                            token = request_user_demat["access_token"]
+                            client_id = request_user_demat["client_id"]
+                            logger.info("✅ Using linked demat credentials for live fetch")
                         if not token or not client_id:
-                            logger.error("❌ Dhan credentials not found in env file - cannot fetch live data")
+                            try:
+                                from dhan_client import get_dhan_token, get_dhan_client_id
+                                token = get_dhan_token()
+                                client_id = get_dhan_client_id()
+                            except Exception:
+                                pass
+                        if not token or not client_id:
+                            logger.warning("⚠️ No Dhan credentials (link demat or set env) - skipping live fetch")
                             return
-                        
-                        logger.info(f"✅ Dhan credentials loaded: Token={bool(token)}, ClientID={bool(client_id)}")
-                        
-                        # Fetch live portfolio data immediately (real-time from Dhan API)
+                        logger.info(f"✅ Dhan credentials: Token={bool(token)}, ClientID={bool(client_id)}")
                         try:
                             dhan_portfolio = await asyncio.wait_for(
-                                loop.run_in_executor(None, get_live_portfolio),
+                                loop.run_in_executor(None, lambda: get_live_portfolio(access_token=token, client_id=client_id)),
                                 timeout=10.0
                             )
                             if dhan_portfolio:
@@ -5505,36 +5732,37 @@ async def update_settings(request: SettingsRequest):
             except Exception as update_err:
                 logger.warning(f"Failed to update bot config: {update_err}")
         
-        # If switching to live mode, initialize bot and fetch Dhan data immediately
+        # If switching to live mode, initialize bot and fetch Dhan data (prefer user's linked demat)
         if mode == "live":
             async def init_bot_and_fetch_dhan():
                 try:
                     logger.info("🔄 Initializing bot for live mode and fetching Dhan credentials...")
                     loop = asyncio.get_event_loop()
-                    
-                    # Initialize bot first
                     try:
                         await loop.run_in_executor(None, initialize_bot)
                         logger.info("✅ Bot initialized successfully for live mode")
                     except Exception as init_error:
                         logger.warning(f"⚠️ Bot initialization failed: {init_error}")
-                        # Continue to try fetching Dhan data anyway
-                    
-                    # Fetch Dhan credentials and portfolio data immediately
+                    token, client_id = None, None
+                    if request_user_demat and request_user_demat.get("access_token") and request_user_demat.get("client_id"):
+                        token = request_user_demat["access_token"]
+                        client_id = request_user_demat["client_id"]
+                        logger.info("✅ Using linked demat credentials for live fetch")
+                    if not token or not client_id:
+                        try:
+                            from dhan_client import get_dhan_token, get_dhan_client_id
+                            token = get_dhan_token()
+                            client_id = get_dhan_client_id()
+                        except Exception:
+                            pass
+                    if not token or not client_id:
+                        logger.warning("⚠️ No Dhan credentials (link demat or set env) - skipping live fetch")
+                        return
+                    logger.info(f"✅ Dhan credentials: Token={bool(token)}, ClientID={bool(client_id)}")
                     try:
-                        from dhan_client import get_dhan_token, get_dhan_client_id, get_live_portfolio
-                        token = get_dhan_token()
-                        client_id = get_dhan_client_id()
-                        
-                        if not token or not client_id:
-                            logger.error("❌ Dhan credentials not found in env file")
-                            return
-                        
-                        logger.info(f"✅ Dhan credentials loaded: Token={bool(token)}, ClientID={bool(client_id)}")
-                        
-                        # Fetch live portfolio data
+                        from dhan_client import get_live_portfolio
                         dhan_portfolio = await asyncio.wait_for(
-                            loop.run_in_executor(None, get_live_portfolio),
+                            loop.run_in_executor(None, lambda: get_live_portfolio(access_token=token, client_id=client_id)),
                             timeout=10.0
                         )
                         if dhan_portfolio:
@@ -5565,14 +5793,17 @@ async def update_settings(request: SettingsRequest):
 
 
 @app.get("/api/live-status")
-async def get_live_trading_status():
-    """Get live trading status and connection info - optimized to avoid blocking"""
+async def get_live_trading_status(user_demat: tuple = Depends(get_optional_user_demat)):
+    """Get live trading status and connection info. When user has linked demat, dhan_configured reflects that (no env required)."""
     try:
         if not LIVE_TRADING_AVAILABLE:
             return {
                 "available": False,
                 "message": "Live trading components not installed"
             }
+
+        payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+        user_has_demat = bool(demat and demat.get("access_token") and demat.get("client_id"))
 
         if trading_bot and trading_bot.config.get("mode") == "live":
             # Check Dhan connection (run in executor with timeout to avoid blocking)
@@ -5629,37 +5860,36 @@ async def get_live_trading_status():
                 except Exception as e:
                     logger.error(f"Error getting live trading status: {e}")
 
-            # Check if Dhan credentials are configured
-            dhan_configured = False
-            dhan_error = None
-            try:
-                # Import dhan_client functions - use relative import since we're in the same directory
+            # Dhan configured: per-user linked demat takes precedence over env
+            if user_has_demat:
+                dhan_configured = True
+                dhan_error = None
+            else:
+                dhan_configured = False
+                dhan_error = None
                 try:
-                    from dhan_client import get_dhan_token, get_dhan_client_id
-                except ImportError:
-                    # Fallback to absolute import
-                    import sys
-                    import os
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    if current_dir not in sys.path:
-                        sys.path.insert(0, current_dir)
-                    from dhan_client import get_dhan_token, get_dhan_client_id
-                
-                token = get_dhan_token() if get_dhan_token else None
-                client_id = get_dhan_client_id() if get_dhan_client_id else None
-                dhan_configured = bool(token and client_id)
-                if not dhan_configured:
-                    dhan_error = "DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID not set in environment"
-            except Exception as cred_error:
-                logger.error(f"Error checking Dhan credentials: {cred_error}")
-                dhan_error = str(cred_error)
+                    try:
+                        from dhan_client import get_dhan_token, get_dhan_client_id
+                    except ImportError:
+                        import sys
+                        import os
+                        current_dir = os.path.dirname(os.path.abspath(__file__))
+                        if current_dir not in sys.path:
+                            sys.path.insert(0, current_dir)
+                        from dhan_client import get_dhan_token, get_dhan_client_id
+                    token = get_dhan_token() if get_dhan_token else None
+                    client_id = get_dhan_client_id() if get_dhan_client_id else None
+                    dhan_configured = bool(token and client_id)
+                    if not dhan_configured:
+                        dhan_error = "DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID not set in environment"
+                except Exception as cred_error:
+                    logger.error(f"Error checking Dhan credentials: {cred_error}")
+                    dhan_error = str(cred_error)
             
-            # Get actual mode from bot config or saved mode
             actual_mode = trading_bot.config.get("mode", "live") if trading_bot else get_current_saved_mode() or "live"
-            
             return {
                 "available": True,
-                "mode": actual_mode,  # Use actual mode from config
+                "mode": actual_mode,
                 "connected": dhan_connected,
                 "dhan_configured": dhan_configured,
                 "dhan_error": dhan_error,
@@ -5668,37 +5898,35 @@ async def get_live_trading_status():
                 "portfolio_synced": trading_bot.live_executor is not None
             }
         else:
-            # Check Dhan credentials even in paper mode
-            dhan_configured = False
-            dhan_error = None
-            try:
-                # Import dhan_client functions - use relative import since we're in the same directory
+            if user_has_demat:
+                dhan_configured = True
+                dhan_error = None
+            else:
+                dhan_configured = False
+                dhan_error = None
                 try:
-                    from dhan_client import get_dhan_token, get_dhan_client_id
-                except ImportError:
-                    # Fallback to absolute import
-                    import sys
-                    import os
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    if current_dir not in sys.path:
-                        sys.path.insert(0, current_dir)
-                    from dhan_client import get_dhan_token, get_dhan_client_id
-                
-                token = get_dhan_token() if get_dhan_token else None
-                client_id = get_dhan_client_id() if get_dhan_client_id else None
-                dhan_configured = bool(token and client_id)
-                if not dhan_configured:
-                    dhan_error = "DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID not set in environment"
-            except Exception as cred_error:
-                logger.error(f"Error checking Dhan credentials: {cred_error}")
-                dhan_error = str(cred_error)
+                    try:
+                        from dhan_client import get_dhan_token, get_dhan_client_id
+                    except ImportError:
+                        import sys
+                        import os
+                        current_dir = os.path.dirname(os.path.abspath(__file__))
+                        if current_dir not in sys.path:
+                            sys.path.insert(0, current_dir)
+                        from dhan_client import get_dhan_token, get_dhan_client_id
+                    token = get_dhan_token() if get_dhan_token else None
+                    client_id = get_dhan_client_id() if get_dhan_client_id else None
+                    dhan_configured = bool(token and client_id)
+                    if not dhan_configured:
+                        dhan_error = "DHAN_ACCESS_TOKEN or DHAN_CLIENT_ID not set in environment"
+                except Exception as cred_error:
+                    logger.error(f"Error checking Dhan credentials: {cred_error}")
+                    dhan_error = str(cred_error)
             
-            # Get saved mode even when bot not initialized
             saved_mode = get_current_saved_mode() if not trading_bot else trading_bot.config.get("mode", "paper")
-            
             return {
                 "available": LIVE_TRADING_AVAILABLE,
-                "mode": saved_mode,  # Use saved mode instead of hardcoded "paper"
+                "mode": saved_mode,
                 "connected": False,
                 "dhan_configured": dhan_configured,
                 "dhan_error": dhan_error,
@@ -5711,8 +5939,32 @@ async def get_live_trading_status():
 
 
 @app.post("/api/live/sync")
-async def sync_live_portfolio():
-    """Force a Dhan sync and return a brief snapshot. Returns 200 with success=false when bot not ready (avoids frontend 400 errors)."""
+async def sync_live_portfolio(user_demat: tuple = Depends(get_optional_user_demat)):
+    """Force a sync and return snapshot. When user has demat linked, fetches their portfolio; else uses trading_bot sync."""
+    payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+    if demat and demat.get("access_token") and demat.get("client_id"):
+        try:
+            from dhan_client import get_live_portfolio
+            loop = asyncio.get_event_loop()
+            dhan_port = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: get_live_portfolio(access_token=demat["access_token"], client_id=demat["client_id"])),
+                timeout=25.0,
+            )
+            if dhan_port:
+                metrics = _dhan_portfolio_to_metrics(dhan_port)
+                return JSONResponse(status_code=200, content={
+                    "success": True,
+                    "message": "Portfolio refreshed",
+                    "data": metrics,
+                    "synced": True,
+                    "cash": metrics.get("cash", 0),
+                    "holdings_value": metrics.get("current_holdings_value", 0),
+                    "total_value": metrics.get("total_value", 0),
+                })
+        except Exception as e:
+            logger.warning(f"Live sync (demat) failed: {e}")
+        return JSONResponse(status_code=200, content={"success": False, "message": "Failed to fetch demat portfolio."})
+
     try:
         if not trading_bot or trading_bot.config.get("mode") != "live":
             return JSONResponse(
@@ -5772,63 +6024,87 @@ class OrderRequest(BaseModel):
 
 
 @app.post("/api/order")
-async def place_order(request: OrderRequest):
+async def place_order(request: OrderRequest, user_demat: tuple = Depends(get_optional_user_demat)):
     """
-    Place a buy or sell order through the trading bot.
-    In live mode, uses live_executor to place orders via Dhan API.
-    In paper mode, simulates the order.
+    Place a buy or sell order. When user has demat linked, uses their broker (Dhan); else uses trading_bot.
     """
+    side = (request.side or "").upper()
+    if side not in ["BUY", "SELL"]:
+        raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
+    if request.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
+
+    payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+    if demat and demat.get("access_token") and demat.get("client_id") and (demat.get("broker") or "dhan") == "dhan":
+        try:
+            from dhan_client import place_order_market
+            loop = asyncio.get_event_loop()
+            out = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: place_order_market(
+                        symbol=request.symbol,
+                        side=side,
+                        quantity=request.quantity,
+                        product_type="CNC",
+                        trigger_price=float(request.stop_loss) if request.stop_loss is not None else None,
+                        access_token=demat["access_token"],
+                        client_id=demat["client_id"],
+                    ),
+                ),
+                timeout=15.0,
+            )
+            if out and isinstance(out, dict):
+                return {
+                    "success": True,
+                    "status": "executed",
+                    "order_id": out.get("orderId") or out.get("order_id", ""),
+                    "symbol": request.symbol,
+                    "side": side,
+                    "quantity": request.quantity,
+                    "price": request.price,
+                    "message": f"{side} order sent successfully",
+                    "mode": "live",
+                }
+            raise HTTPException(status_code=400, detail="Order failed or no response from broker")
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Order request timed out")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Demat order failed")
+            raise HTTPException(status_code=400, detail=str(e))
+
     try:
         if not trading_bot:
-            raise HTTPException(status_code=503, detail="Trading bot not initialized")
+            raise HTTPException(status_code=503, detail="Trading bot not initialized. Link a demat account or start the bot.")
 
         current_mode = trading_bot.config.get("mode", "paper")
-        side = request.side.upper()
-
-        if side not in ["BUY", "SELL"]:
-            raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
-
-        if request.quantity <= 0:
-            raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
-
-        # Prepare signal data for live executor
         signal_data = {
             "quantity": request.quantity,
             "current_price": request.price,
             "stop_loss": request.stop_loss,
             "take_profit": request.take_profit,
-            "confidence": 1.0,  # Manual order - full confidence
-            "order_type": request.order_type or "MARKET"
+            "confidence": 1.0,
+            "order_type": request.order_type or "MARKET",
         }
 
-        # Execute order based on mode
         if current_mode == "live":
             if not LIVE_TRADING_AVAILABLE:
                 raise HTTPException(status_code=503, detail="Live trading not available")
-
             if not hasattr(trading_bot, "live_executor") or not trading_bot.live_executor:
-                raise HTTPException(
-                    status_code=503, detail="Live executor not initialized. Please ensure Dhan credentials are configured.")
-
-            # Execute through live executor
+                raise HTTPException(status_code=503, detail="Live executor not initialized. Please ensure Dhan credentials are configured.")
             if side == "BUY":
                 result = trading_bot.live_executor.execute_buy_order(request.symbol, signal_data)
-            else:  # SELL
+            else:
                 result = trading_bot.live_executor.execute_sell_order(request.symbol, signal_data)
-
             if not result.get("success", False):
-                error_msg = result.get("message", "Order execution failed")
-                logger.error(f"Order execution failed: {error_msg}")
-                raise HTTPException(status_code=400, detail=error_msg)
-
-            # Sync portfolio after order execution
+                raise HTTPException(status_code=400, detail=result.get("message", "Order execution failed"))
             try:
-                # Run sync in background to avoid blocking response
                 loop = asyncio.get_event_loop()
                 loop.run_in_executor(None, trading_bot.live_executor.sync_portfolio_with_dhan)
-            except Exception as sync_err:
-                logger.warning(f"Background sync failed: {sync_err}")
-
+            except Exception:
+                pass
             return {
                 "success": True,
                 "status": "executed",
@@ -5838,48 +6114,44 @@ async def place_order(request: OrderRequest):
                 "quantity": result.get("quantity", request.quantity),
                 "price": result.get("price"),
                 "message": result.get("message", f"{side} order executed successfully"),
-                "mode": "live"
+                "mode": "live",
             }
 
-        else:  # Paper mode
-            # Simulate order execution in paper mode
-            logger.info(f"Paper mode: Simulating {side} order for {request.quantity} {request.symbol}")
-
-            # Use portfolio manager to simulate trade
-            try:
-                if side == "BUY":
-                    trading_bot.portfolio_manager.record_trade(
-                        ticker=request.symbol,
-                        action="buy",
-                        quantity=request.quantity,
-                        price=request.price or 100.0,  # Default price if not provided
-                        stop_loss=request.stop_loss,
-                        take_profit=request.take_profit
-                    )
-                else:  # SELL
-                    trading_bot.portfolio_manager.record_trade(
-                        ticker=request.symbol,
-                        action="sell",
-                        quantity=request.quantity,
-                        price=request.price or 100.0,
-                        stop_loss=request.stop_loss,
-                        take_profit=request.take_profit
-                    )
-
-                return {
-                    "success": True,
-                    "status": "executed",
-                    "order_id": f"paper-{int(time.time())}",
-                    "symbol": request.symbol,
-                    "side": side,
-                    "quantity": request.quantity,
-                    "price": request.price or 100.0,
-                    "message": f"{side} order simulated successfully (paper mode)",
-                    "mode": "paper"
-                }
-            except Exception as paper_err:
-                logger.error(f"Paper mode order simulation failed: {paper_err}")
-                raise HTTPException(status_code=500, detail=f"Paper mode simulation failed: {str(paper_err)}")
+        # Paper mode
+        logger.info(f"Paper mode: Simulating {side} order for {request.quantity} {request.symbol}")
+        try:
+            if side == "BUY":
+                trading_bot.portfolio_manager.record_trade(
+                    ticker=request.symbol,
+                    action="buy",
+                    quantity=request.quantity,
+                    price=request.price or 100.0,
+                    stop_loss=request.stop_loss,
+                    take_profit=request.take_profit
+                )
+            else:
+                trading_bot.portfolio_manager.record_trade(
+                    ticker=request.symbol,
+                    action="sell",
+                    quantity=request.quantity,
+                    price=request.price or 100.0,
+                    stop_loss=request.stop_loss,
+                    take_profit=request.take_profit
+                )
+            return {
+                "success": True,
+                "status": "executed",
+                "order_id": f"paper-{int(time.time())}",
+                "symbol": request.symbol,
+                "side": side,
+                "quantity": request.quantity,
+                "price": request.price or 100.0,
+                "message": f"{side} order simulated successfully (paper mode)",
+                "mode": "paper"
+            }
+        except Exception as paper_err:
+            logger.error(f"Paper mode order simulation failed: {paper_err}")
+            raise HTTPException(status_code=500, detail=f"Paper mode simulation failed: {str(paper_err)}")
 
     except HTTPException:
         raise
@@ -5894,10 +6166,22 @@ async def place_order(request: OrderRequest):
 # ============================================================================
 
 
-@app.post("/api/mcp/analyze")
-async def mcp_analyze_market(request: MCPAnalysisRequest):
-    """MCP-powered comprehensive market analysis with AI reasoning"""
+def _set_mcp_user_context_from_request(user_demat: tuple) -> None:
+    """Set request-scoped user context for MCP (per-user portfolio/order)."""
     try:
+        from request_context import set_mcp_user_context
+        payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+        user_id = (payload.get("sub") or "").strip() if payload else None
+        set_mcp_user_context(user_id, demat)
+    except Exception as e:
+        logger.debug(f"set_mcp_user_context: {e}")
+
+
+@app.post("/api/mcp/analyze")
+async def mcp_analyze_market(request: MCPAnalysisRequest, user_demat: tuple = Depends(get_optional_user_demat)):
+    """MCP-powered comprehensive market analysis with AI reasoning. Uses request user's demat when linked."""
+    try:
+        _set_mcp_user_context_from_request(user_demat)
         if not MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="MCP server not available")
@@ -5940,9 +6224,10 @@ async def mcp_analyze_market(request: MCPAnalysisRequest):
 
 
 @app.post("/api/mcp/execute")
-async def mcp_execute_trade(request: MCPTradeRequest):
-    """MCP-controlled trade execution with detailed explanation"""
+async def mcp_execute_trade(request: MCPTradeRequest, user_demat: tuple = Depends(get_optional_user_demat)):
+    """MCP-controlled trade execution. Uses request user's demat when linked."""
     try:
+        _set_mcp_user_context_from_request(user_demat)
         if not MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="MCP server not available")
@@ -5972,15 +6257,51 @@ async def mcp_execute_trade(request: MCPTradeRequest):
             explanation = GroqResponse(
                 content="MCP analysis completed", reasoning=signal.reasoning)
 
-        # Execute trade if confidence is high enough
+        # Execute real order when confidence is high and user has demat linked (any broker)
         execution_result = None
         if signal.confidence > 0.7 and signal.decision.value in ["BUY", "SELL"]:
-            # Here you would integrate with actual trade execution
-            execution_result = {
-                "executed": True,
-                "order_id": f"MCP_{int(time.time())}",
-                "message": f"Trade executed: {signal.decision.value} {request.symbol}"
-            }
+            payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
+            if not demat or not demat.get("access_token") or not demat.get("client_id"):
+                execution_result = {
+                    "executed": False,
+                    "reason": "Link your demat account in BOT Settings to place real orders",
+                    "message": "Demat not linked"
+                }
+            else:
+                quantity = request.quantity if request.quantity and request.quantity > 0 else 1
+                try:
+                    from request_context import place_order_for_request_user
+                    loop = asyncio.get_event_loop()
+                    out = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: place_order_for_request_user(
+                                symbol=request.symbol,
+                                side=signal.decision.value,
+                                quantity=quantity,
+                                product_type="CNC",
+                                trigger_price=None,
+                            ),
+                        ),
+                        timeout=15.0,
+                    )
+                    if out and isinstance(out, dict):
+                        execution_result = {
+                            "executed": True,
+                            "order_id": out.get("orderId") or out.get("order_id") or f"MCP_{int(time.time())}",
+                            "message": f"Order sent: {signal.decision.value} {request.symbol} qty={quantity}",
+                        }
+                    else:
+                        execution_result = {
+                            "executed": False,
+                            "reason": "Broker did not return order confirmation",
+                            "message": "Order may have failed",
+                        }
+                except asyncio.TimeoutError:
+                    execution_result = {"executed": False, "reason": "Order request timed out", "message": "Timeout"}
+                except Exception as e:
+                    logger.exception("MCP execute order failed")
+                    execution_result = {"executed": False, "reason": str(e), "message": "Order failed"}
         else:
             execution_result = {
                 "executed": False,
@@ -6009,9 +6330,10 @@ async def mcp_execute_trade(request: MCPTradeRequest):
 
 
 @app.post("/api/mcp/chat")
-async def mcp_chat(request: MCPChatRequest):
-    """Advanced AI chat with market context and reasoning"""
+async def mcp_chat(request: MCPChatRequest, user_demat: tuple = Depends(get_optional_user_demat)):
+    """Advanced AI chat with market context. Uses request user's demat for portfolio when linked."""
     try:
+        _set_mcp_user_context_from_request(user_demat)
         if not MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="MCP server not available")
@@ -6065,13 +6387,26 @@ async def mcp_chat(request: MCPChatRequest):
                 }
 
         elif any(keyword in message for keyword in ["portfolio", "risk", "allocation"]):
-            # Portfolio-related query
-            if trading_bot:
+            # Portfolio-related query (prefer request user's demat when set)
+            portfolio_data = None
+            try:
+                from request_context import get_portfolio_for_request_user
+                user_port = get_portfolio_for_request_user()
+                if user_port and isinstance(user_port, dict):
+                    portfolio_data = {
+                        "holdings": user_port.get("holdings", {}),
+                        "cash": user_port.get("cash", 0),
+                        "risk_profile": "MEDIUM"
+                    }
+            except Exception:
+                pass
+            if not portfolio_data and trading_bot:
                 portfolio_data = {
                     "holdings": trading_bot.get_portfolio_metrics().get("holdings", {}),
                     "cash": trading_bot.get_portfolio_metrics().get("cash", 0),
                     "risk_profile": trading_bot.config.get("riskLevel", "MEDIUM")
                 }
+            if portfolio_data:
 
                 async with groq_engine:
                     response = await groq_engine.optimize_portfolio(portfolio_data)
@@ -6117,14 +6452,14 @@ async def mcp_chat(request: MCPChatRequest):
 
 
 @app.post("/api/mcp/predict")
-async def mcp_predict(request: PredictionRequest):
-    """MCP-powered prediction ranking with natural language interpretation"""
+async def mcp_predict(request: PredictionRequest, user_demat: tuple = Depends(get_optional_user_demat)):
+    """MCP-powered prediction ranking. Uses request user's demat when linked."""
     try:
+        _set_mcp_user_context_from_request(user_demat)
         if not MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="MCP server not available")
 
-        # Initialize MCP components if needed
         await _ensure_mcp_initialized()
 
         # Generate a session ID for this request
@@ -6169,14 +6504,14 @@ async def mcp_predict(request: PredictionRequest):
 
 
 @app.post("/api/mcp/scan")
-async def mcp_scan(request: ScanRequest):
-    """MCP-powered stock scanning with filtered shortlists"""
+async def mcp_scan(request: ScanRequest, user_demat: tuple = Depends(get_optional_user_demat)):
+    """MCP-powered stock scanning. Uses request user's demat when linked."""
     try:
+        _set_mcp_user_context_from_request(user_demat)
         if not MCP_AVAILABLE:
             raise HTTPException(
                 status_code=503, detail="MCP server not available")
 
-        # Initialize MCP components if needed
         await _ensure_mcp_initialized()
 
         # Generate a session ID for this request

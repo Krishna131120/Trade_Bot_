@@ -78,20 +78,19 @@ const Sidebar = ({ isOpen = true, onClose, isCollapsed = false, onToggleCollapse
   };
 
   // Handle logout and close sidebar on mobile
-  const handleLogout = (e?: React.MouseEvent) => {
-    // Prevent any default behavior
+  const handleLogout = async (e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
-
-    // Clear state first
+    try {
+      const { authAPI } = await import('../services/api');
+      await authAPI.logout();
+    } catch {
+      // Proceed to clear local state even if backend fails
+    }
     logout();
-
-    // Close sidebar on mobile
     if (onClose && window.innerWidth < 1024) {
       onClose();
     }
-
-    // Navigate immediately using React Router (replace: true prevents back button)
     navigate('/', { replace: true });
   };
 

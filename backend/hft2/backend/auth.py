@@ -172,3 +172,63 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"Failed to authenticate user from MongoDB: {e}", exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Per-user demat (broker) credentials - any broker, token refresh supported
+# ---------------------------------------------------------------------------
+
+def get_user_demat(username: str) -> Optional[dict]:
+    """Get demat credentials for user. Returns dict with broker, client_id, access_token or None."""
+    col = _get_users_collection()
+    if col is None:
+        return None
+    u = col.find_one({"username": username.lower().strip()})
+    if not u:
+        return None
+    broker = u.get("demat_broker")
+    client_id = u.get("demat_client_id")
+    token = u.get("demat_access_token")
+    if not client_id or not token:
+        return None
+    return {"broker": broker or "dhan", "client_id": client_id, "access_token": token}
+
+
+def set_user_demat(username: str, broker: str, client_id: str, access_token: str) -> bool:
+    """Save or update demat credentials for user. Returns True only when a user document was found and updated."""
+    try:
+        col = _get_users_collection()
+        if col is None:
+            return False
+        normalized = username.lower().strip()
+        result = col.update_one(
+            {"username": normalized},
+            {"$set": {
+                "demat_broker": (broker or "dhan").strip(),
+                "demat_client_id": (client_id or "").strip(),
+                "demat_access_token": (access_token or "").strip(),
+                "demat_updated_at": datetime.utcnow(),
+            }},
+            upsert=False,
+        )
+        return result.matched_count > 0
+    except Exception as e:
+        logger.error(f"set_user_demat failed: {e}")
+        return False
+
+
+def update_user_demat_token(username: str, access_token: str) -> bool:
+    """Update only the access token for the same user (refresh token). Returns True on success."""
+    try:
+        col = _get_users_collection()
+        if col is None:
+            return False
+        normalized = username.lower().strip()
+        result = col.update_one(
+            {"username": normalized},
+            {"$set": {"demat_access_token": (access_token or "").strip(), "demat_updated_at": datetime.utcnow()}},
+        )
+        return result.modified_count > 0 or result.matched_count > 0
+    except Exception as e:
+        logger.error(f"update_user_demat_token failed: {e}")
+        return False

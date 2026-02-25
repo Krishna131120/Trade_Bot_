@@ -156,12 +156,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userStorage = getUserStorage(user.username);
       userStorage.clearUserData();
     }
-    // Clear user state and auth keys from localStorage
     setUser(null);
     localStorage.removeItem('token');
     localStorage.removeItem('username');
-    // Note: Navigation is handled by the component calling logout
-    // This allows React Router to handle navigation properly
+    // Clear any other auth/session keys that might persist
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k === 'token' || k === 'username' || k.startsWith('auth_') || k.startsWith('session_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // ignore
+    }
   };
 
   return (

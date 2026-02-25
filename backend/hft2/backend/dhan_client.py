@@ -118,16 +118,18 @@ def _get_fyers_ltp(symbol: str) -> Optional[float]:
     return None
 
 
-def get_live_portfolio() -> Optional[Dict]:
-    """Build portfolio dict for HFT dashboard from Dhan: holdings, cash, totalValue, tradeLog."""
+def get_live_portfolio(access_token: Optional[str] = None, client_id: Optional[str] = None) -> Optional[Dict]:
+    """Build portfolio dict for HFT dashboard from Dhan: holdings, cash, totalValue, tradeLog.
+    When access_token/client_id are provided (e.g. per-user), uses them and skips cache. Otherwise uses env and cache."""
     global _portfolio_cache, _portfolio_cache_time
+    token = access_token or get_dhan_token()
+    cid = client_id or get_dhan_client_id()
+    use_cache = not (access_token or client_id)
     now = time.time()
-    if _portfolio_cache and (now - _portfolio_cache_time) < _PORTFOLIO_CACHE_TTL:
+    if use_cache and _portfolio_cache and (now - _portfolio_cache_time) < _PORTFOLIO_CACHE_TTL:
         return _portfolio_cache
 
-    token = get_dhan_token()
-    client_id = get_dhan_client_id()
-    logger.info(f"[get_live_portfolio] Token: {bool(token)}, Client ID: {bool(client_id)}")
+    logger.info(f"[get_live_portfolio] Token: {bool(token)}, Client ID: {bool(cid)}")
     if not token:
         logger.warning("[get_live_portfolio] No Dhan token - cannot fetch portfolio")
         return None
@@ -211,8 +213,9 @@ def get_live_portfolio() -> Optional[Dict]:
         "tradeLog": [],
     }
     logger.info(f"[get_live_portfolio] Final portfolio: totalValue={result['totalValue']}, holdings={len(holdings)}, symbols={list(holdings.keys())}")
-    _portfolio_cache = result
-    _portfolio_cache_time = time.time()
+    if use_cache:
+        _portfolio_cache = result
+        _portfolio_cache_time = time.time()
     return result
 
 
@@ -269,6 +272,8 @@ class DhanAPIClient:
             quantity=quantity,
             product_type="CNC",
             trigger_price=float(price) if price is not None else None,
+            access_token=self.access_token,
+            client_id=self.client_id,
         )
 
     def get_orders(self) -> List[Dict]:
@@ -341,11 +346,12 @@ def _resolve_dhan_security_id(sym_clean: str) -> tuple:
     return None, "NSE_EQ"
 
 
-def place_order_market(symbol: str, side: str, quantity: int, product_type: str = "CNC", trigger_price: Optional[float] = None) -> Optional[Dict]:
-    """Place MARKET order via Dhan. Resolves securityId from holdings, positions, or instruments master. Returns order response or None."""
-    token = get_dhan_token()
-    client_id = get_dhan_client_id()
-    if not token or not client_id:
+def place_order_market(symbol: str, side: str, quantity: int, product_type: str = "CNC", trigger_price: Optional[float] = None, access_token: Optional[str] = None, client_id: Optional[str] = None) -> Optional[Dict]:
+    """Place MARKET order via Dhan. Resolves securityId from holdings, positions, or instruments master.
+    When access_token/client_id provided (per-user), uses them; else uses env."""
+    token = access_token or get_dhan_token()
+    cid = client_id or get_dhan_client_id()
+    if not token or not cid:
         return None
     holdings_list = fetch_holdings(token)
     # Symbol from frontend e.g. RELIANCE.NS or TCS.NS; Dhan uses RELIANCE, TCS
@@ -370,7 +376,7 @@ def place_order_market(symbol: str, side: str, quantity: int, product_type: str 
         logger.warning("Could not resolve securityId for %s (not in holdings/positions/instruments)", symbol)
         return None
     body = {
-        "dhanClientId": client_id,
+        "dhanClientId": cid,
         "transactionType": side.upper(),
         "exchangeSegment": exchange_segment,
         "productType": product_type,

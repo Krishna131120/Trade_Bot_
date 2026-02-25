@@ -21,8 +21,12 @@ import sys
 import os
 from typing import TYPE_CHECKING
 
-# Add path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+# Add path for imports (hft2 and backend for request_context)
+_base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(_base)
+_backend = os.path.join(_base, "backend")
+if _backend not in sys.path:
+    sys.path.insert(0, _backend)
 
 # Critical Fix: Use TYPE_CHECKING for type hints only
 if TYPE_CHECKING:
@@ -433,12 +437,35 @@ class TradingAgent:
             return {"error": str(e), "current_price": 0.0}
     
     async def _get_portfolio_context(self) -> Dict[str, Any]:
-        """Get current portfolio context"""
+        """Get current portfolio context. Uses request user's demat when set (MCP per-user)."""
         try:
-            # Get current positions and funds
+            # Per-user: if request context has demat, use that portfolio
+            try:
+                from request_context import get_portfolio_for_request_user
+                user_port = get_portfolio_for_request_user()
+                if user_port and isinstance(user_port, dict):
+                    holdings = user_port.get("holdings", {})
+                    cash = float(user_port.get("cash", 0))
+                    total_value = float(user_port.get("totalValue", cash))
+                    exposure = sum(
+                        (h.get("quantity") or 0) * (h.get("currentPrice") or h.get("avgPrice") or 0)
+                        for h in holdings.values()
+                    )
+                    return {
+                        "total_positions": len(holdings),
+                        "available_margin": cash,
+                        "used_margin": exposure,
+                        "total_capital": total_value,
+                        "current_exposure": exposure,
+                    }
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.debug(f"Request user portfolio fallback: {e}")
+
+            # Default: Fyers (shared)
             positions = await self.fyers_client.get_positions()
             funds = await self.fyers_client.get_funds()
-            
             return {
                 "total_positions": len(positions),
                 "available_margin": funds.get("availableMargin", 0),
@@ -446,7 +473,6 @@ class TradingAgent:
                 "total_capital": funds.get("totalBalance", 0),
                 "current_exposure": sum(pos.get("netQty", 0) * pos.get("ltp", 0) for pos in positions)
             }
-            
         except Exception as e:
             logger.error(f"Portfolio context error: {e}")
             return {"error": str(e)}

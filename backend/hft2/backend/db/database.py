@@ -17,8 +17,9 @@ Base = declarative_base()
 
 class Portfolio(Base):
     __tablename__ = 'portfolios'
-    
+
     id = Column(Integer, primary_key=True)
+    user_id = Column(String, index=True, nullable=True)  # None = legacy/global; set = per-user
     mode = Column(String, index=True)  # 'paper' or 'live'
     cash = Column(Float, default=0.0)
     starting_balance = Column(Float)
@@ -86,6 +87,24 @@ def _default_db_uri() -> str:
     return f"sqlite:///{(data_dir / 'trading.db').as_posix()}"
 
 
+def _migrate_add_user_id_to_portfolios(engine) -> None:
+    """Add user_id column to portfolios if missing (SQLite-safe)."""
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            if engine.dialect.name == "sqlite":
+                r = conn.execute(text("PRAGMA table_info(portfolios)"))
+                rows = r.fetchall()
+                # sqlite returns (cid, name, type, notnull, dflt_value, pk)
+                has_user_id = any((row[1] == "user_id" for row in rows))
+                if not has_user_id:
+                    conn.execute(text("ALTER TABLE portfolios ADD COLUMN user_id VARCHAR(255)"))
+                    conn.commit()
+                    logger.info("Migrated portfolios: added user_id column")
+    except Exception as e:
+        logger.warning(f"Portfolio user_id migration skipped or failed: {e}")
+
+
 def init_db(db_path: str | None = None):
     """Initialize the database and create tables"""
     try:
@@ -94,6 +113,7 @@ def init_db(db_path: str | None = None):
         engine = create_engine(db_uri)
         logger.info("Creating database tables")
         Base.metadata.create_all(engine)
+        _migrate_add_user_id_to_portfolios(engine)
         logger.info("Database tables created successfully")
         return engine
     except Exception as e:

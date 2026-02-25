@@ -111,6 +111,28 @@ export const hftApiService = {
         }
     },
 
+    // ===== Per-user Demat (broker) credentials =====
+    async getDematStatus(): Promise<{ linked: boolean; broker?: string; client_id_masked?: string }> {
+        const response = await api.get<{ linked: boolean; broker?: string; client_id_masked?: string }>('/user/demat');
+        return response.data;
+    },
+
+    async saveDemat(broker: string, clientId: string, accessToken: string): Promise<{ success: boolean; message?: string }> {
+        const response = await api.post<{ success: boolean; message?: string }>('/user/demat', {
+            broker: broker || 'dhan',
+            client_id: clientId,
+            access_token: accessToken,
+        });
+        return response.data;
+    },
+
+    async refreshDematToken(accessToken: string): Promise<{ success: boolean; message?: string }> {
+        const response = await api.put<{ success: boolean; message?: string }>('/user/demat/token', {
+            access_token: accessToken,
+        });
+        return response.data;
+    },
+
     // ===== Watchlist Management =====
     async getWatchlist(): Promise<string[]> {
         try {

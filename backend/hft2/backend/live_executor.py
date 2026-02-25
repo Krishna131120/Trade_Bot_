@@ -99,6 +99,14 @@ class LiveTradingExecutor:
 
         logger.info("Live Trading Executor initialized")
 
+    def _live_portfolio_filter(self) -> Dict[str, Any]:
+        """Filter kwargs for live portfolio query (scoped by user when portfolio_manager has user_id)."""
+        out: Dict[str, Any] = {"mode": "live"}
+        uid = getattr(self.portfolio_manager, "user_id", None)
+        if uid is not None:
+            out["user_id"] = uid
+        return out
+
     def validate_connection(self) -> bool:
         """Validate Dhan API connection"""
         try:
@@ -147,12 +155,11 @@ class LiveTradingExecutor:
             session = None
             try:
                 session = self.portfolio_manager.db.Session()
-                portfolio = session.query(
-                    Portfolio).filter_by(mode='live').first()
+                portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
                 if not portfolio:
-                    # Create live portfolio if it doesn't exist
                     portfolio = Portfolio(
                         mode='live',
+                        user_id=getattr(self.portfolio_manager, "user_id", None),
                         cash=available_cash,
                         starting_balance=available_cash,
                         realized_pnl=0.0,
@@ -301,9 +308,8 @@ class LiveTradingExecutor:
         """
         session = None
         try:
-            # Get portfolio summary from database
             session = self.portfolio_manager.db.Session()
-            portfolio = session.query(Portfolio).filter_by(mode='live').first()
+            portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
             if not portfolio:
                 logger.warning(f"No live portfolio found for position sizing")
                 return 0
@@ -446,8 +452,7 @@ class LiveTradingExecutor:
                 available_cash = 0.0
                 session = self.portfolio_manager.db.Session()
                 try:
-                    portfolio = session.query(
-                        Portfolio).filter_by(mode='live').first()
+                    portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
                     if portfolio:
                         available_cash = float(portfolio.cash or 0.0)
                         logger.debug(
@@ -468,8 +473,7 @@ class LiveTradingExecutor:
                         # Read from database after successful sync
                         session = self.portfolio_manager.db.Session()
                         try:
-                            portfolio = session.query(
-                                Portfolio).filter_by(mode='live').first()
+                            portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
                             if portfolio:
                                 available_cash = float(portfolio.cash or 0.0)
                                 logger.info(
@@ -664,8 +668,7 @@ class LiveTradingExecutor:
             session = None
             try:
                 session = self.portfolio_manager.db.Session()
-                portfolio = session.query(
-                    Portfolio).filter_by(mode='live').first()
+                portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
                 if not portfolio:
                     return {"success": False, "message": "No live portfolio found"}
 
@@ -813,7 +816,7 @@ class LiveTradingExecutor:
         session = None
         try:
             session = self.portfolio_manager.db.Session()
-            portfolio = session.query(Portfolio).filter_by(mode='live').first()
+            portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
             if not portfolio:
                 logger.error("No live portfolio found for execution update")
                 return
@@ -940,9 +943,9 @@ class LiveTradingExecutor:
         session = None
         try:
             session = self.portfolio_manager.db.Session()
-            portfolio = session.query(Portfolio).filter_by(mode='live').first()
+            portfolio = session.query(Portfolio).filter_by(**self._live_portfolio_filter()).first()
             if portfolio:
-                total_value = portfolio.cash  # Simple calculation
+                total_value = portfolio.cash
                 max_loss = total_value * self.max_daily_loss
 
                 if self.daily_pnl < -max_loss:

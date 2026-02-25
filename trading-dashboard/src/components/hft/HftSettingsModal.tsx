@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
-import { X, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
+import { X, CheckCircle2, AlertCircle, Link2, RefreshCw } from 'lucide-react';
 import { hftApiService } from '../../services/hftApiService';
 import type { HftSettingsUpdate } from '../../types/hft';
 
@@ -19,6 +20,7 @@ interface HftSettingsModalProps {
 
 const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, onClose }) => {
     const { theme } = useTheme();
+    const { user } = useAuth();
     const isLight = theme === 'light';
     const isSpace = theme === 'space';
 
@@ -31,6 +33,18 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
     const [loading, setLoading] = useState(false);
     const [dhanConfigured, setDhanConfigured] = useState<boolean | null>(null);
     const [dhanError, setDhanError] = useState<string | null>(null);
+
+    // Per-user demat (link/refresh)
+    const [dematLinked, setDematLinked] = useState(false);
+    const [dematBroker, setDematBroker] = useState<string>('');
+    const [dematMaskedId, setDematMaskedId] = useState<string | null>(null);
+    const [dematLoading, setDematLoading] = useState(false);
+    const [dematError, setDematError] = useState<string | null>(null);
+    const [dematSuccess, setDematSuccess] = useState<string | null>(null);
+    const [showDematLinkForm, setShowDematLinkForm] = useState(false);
+    const [showDematRefreshForm, setShowDematRefreshForm] = useState(false);
+    const [dematLinkForm, setDematLinkForm] = useState({ broker: 'dhan', clientId: '', accessToken: '' });
+    const [dematRefreshToken, setDematRefreshToken] = useState('');
 
     useEffect(() => {
         if (settings) {
@@ -55,6 +69,26 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
             .catch(() => { if (!cancelled) { setDhanConfigured(false); setDhanError(null); } });
         return () => { cancelled = true; };
     }, []);
+
+    useEffect(() => {
+        if (!user?.username) {
+            setDematLinked(false);
+            setDematBroker('');
+            setDematMaskedId(null);
+            return;
+        }
+        let cancelled = false;
+        hftApiService.getDematStatus()
+            .then((res) => {
+                if (!cancelled) {
+                    setDematLinked(res.linked ?? false);
+                    setDematBroker(res.broker ?? '');
+                    setDematMaskedId(res.client_id_masked ?? null);
+                }
+            })
+            .catch(() => { if (!cancelled) { setDematLinked(false); setDematBroker(''); setDematMaskedId(null); } });
+        return () => { cancelled = true; };
+    }, [user?.username]);
 
     const handleInputChange = (field: keyof SettingsFormData, value: any) => {
         setFormData(prev => {
@@ -132,6 +166,49 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
     const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
         if (e.target === e.currentTarget) {
             onClose();
+        }
+    };
+
+    const handleSaveDematLink = async () => {
+        if (!dematLinkForm.clientId.trim() || !dematLinkForm.accessToken.trim()) {
+            setDematError('Client ID and Access Token are required.');
+            return;
+        }
+        setDematLoading(true);
+        setDematError(null);
+        setDematSuccess(null);
+        try {
+            await hftApiService.saveDemat(dematLinkForm.broker, dematLinkForm.clientId.trim(), dematLinkForm.accessToken.trim());
+            setDematLinked(true);
+            setDematBroker(dematLinkForm.broker);
+            setDematMaskedId(dematLinkForm.clientId.trim().slice(0, 4) + '***');
+            setDematSuccess('Demat account linked.');
+            setShowDematLinkForm(false);
+            setDematLinkForm(prev => ({ ...prev, clientId: '', accessToken: '' }));
+        } catch (err: any) {
+            setDematError(err?.response?.data?.detail || err?.message || 'Failed to save demat credentials.');
+        } finally {
+            setDematLoading(false);
+        }
+    };
+
+    const handleRefreshDematToken = async () => {
+        if (!dematRefreshToken.trim()) {
+            setDematError('Enter the new access token.');
+            return;
+        }
+        setDematLoading(true);
+        setDematError(null);
+        setDematSuccess(null);
+        try {
+            await hftApiService.refreshDematToken(dematRefreshToken.trim());
+            setDematSuccess('Access token updated. Use it for the next 24h.');
+            setShowDematRefreshForm(false);
+            setDematRefreshToken('');
+        } catch (err: any) {
+            setDematError(err?.response?.data?.detail || err?.message || 'Failed to update token.');
+        } finally {
+            setDematLoading(false);
         }
     };
 
@@ -217,6 +294,103 @@ const HftSettingsModal: React.FC<HftSettingsModalProps> = ({ settings, onSave, o
                                 <span className="font-medium">Fetch error: </span>
                                 <span>{dhanError}</span>
                             </div>
+                        )}
+                    </div>
+
+                    {/* Demat account (per-user) */}
+                    <div className={`border-t pt-4 ${modalBorder}`}>
+                        <label className={`block text-sm font-semibold mb-2 ${textPrimary}`}>
+                            <Link2 className="w-4 h-4 inline-block mr-1 align-middle" /> Demat account
+                        </label>
+                        {!user?.username ? (
+                            <p className={`text-sm ${textMuted}`}>Log in to link your demat (Client ID + Access Token). Portfolio and orders will use your account only.</p>
+                        ) : (
+                            <>
+                                {dematError && (
+                                    <div className="mb-2 px-3 py-2 rounded-lg text-sm bg-red-500/10 text-red-600 dark:text-red-400">{dematError}</div>
+                                )}
+                                {dematSuccess && (
+                                    <div className="mb-2 px-3 py-2 rounded-lg text-sm bg-green-500/10 text-green-600 dark:text-green-400">{dematSuccess}</div>
+                                )}
+                                {dematLinked ? (
+                                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-green-500/10 text-green-600 dark:text-green-400`}>
+                                        <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                                        <span>Linked</span>
+                                        {dematBroker && <span>({dematBroker})</span>}
+                                        {dematMaskedId && <span> • {dematMaskedId}</span>}
+                                    </div>
+                                ) : (
+                                    <p className={`text-sm ${textMuted}`}>No demat linked. Add credentials to see your portfolio and place orders.</p>
+                                )}
+                                {!showDematLinkForm && !showDematRefreshForm && (
+                                    <div className="flex gap-2 mt-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => { setShowDematLinkForm(true); setShowDematRefreshForm(false); setDematError(null); setDematSuccess(null); }}
+                                            disabled={dematLoading}
+                                            className={`px-3 py-1.5 rounded-lg text-sm font-medium ${dematLinked ? 'border border-current' : 'bg-blue-600 text-white'} ${isLight ? 'text-blue-600 border-blue-600 hover:bg-blue-50' : 'border-slate-400 hover:bg-slate-700'}`}
+                                        >
+                                            {dematLinked ? 'Update credentials' : 'Link demat'}
+                                        </button>
+                                        {dematLinked && (
+                                            <button
+                                                type="button"
+                                                onClick={() => { setShowDematRefreshForm(true); setShowDematLinkForm(false); setDematError(null); setDematSuccess(null); }}
+                                                disabled={dematLoading}
+                                                className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 ${isLight ? 'text-amber-600 border border-amber-600 hover:bg-amber-50' : 'border border-amber-400 text-amber-400 hover:bg-slate-700'}`}
+                                            >
+                                                <RefreshCw className="w-3.5 h-3.5" /> Refresh token
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                                {showDematLinkForm && (
+                                    <div className={`mt-3 p-3 rounded-lg border ${inputBorder} ${inputBg}`}>
+                                        <p className={`text-xs ${textMuted} mb-2`}>Broker, Client ID and Access Token are stored only for your account and used for portfolio and orders.</p>
+                                        <select
+                                            value={dematLinkForm.broker}
+                                            onChange={(e) => setDematLinkForm(prev => ({ ...prev, broker: e.target.value }))}
+                                            className={`w-full mb-2 px-3 py-2 rounded border ${selectBg} ${selectText} ${inputBorder} text-sm`}
+                                        >
+                                            <option value="dhan">Dhan</option>
+                                        </select>
+                                        <input
+                                            type="text"
+                                            placeholder="Client ID"
+                                            value={dematLinkForm.clientId}
+                                            onChange={(e) => setDematLinkForm(prev => ({ ...prev, clientId: e.target.value }))}
+                                            className={`w-full mb-2 px-3 py-2 rounded border ${inputBg} ${inputBorder} text-sm`}
+                                        />
+                                        <input
+                                            type="password"
+                                            placeholder="Access Token"
+                                            value={dematLinkForm.accessToken}
+                                            onChange={(e) => setDematLinkForm(prev => ({ ...prev, accessToken: e.target.value }))}
+                                            className={`w-full mb-2 px-3 py-2 rounded border ${inputBg} ${inputBorder} text-sm`}
+                                        />
+                                        <div className="flex gap-2">
+                                            <button type="button" onClick={() => setShowDematLinkForm(false)} className="px-3 py-1.5 rounded text-sm border border-current">Cancel</button>
+                                            <button type="button" onClick={handleSaveDematLink} disabled={dematLoading} className="px-3 py-1.5 rounded text-sm bg-green-600 text-white disabled:opacity-50">{dematLoading ? 'Saving...' : 'Save'}</button>
+                                        </div>
+                                    </div>
+                                )}
+                                {showDematRefreshForm && (
+                                    <div className={`mt-3 p-3 rounded-lg border ${inputBorder} ${inputBg}`}>
+                                        <p className={`text-xs ${textMuted} mb-2`}>Access tokens often expire every 24h. Paste the new token below.</p>
+                                        <input
+                                            type="password"
+                                            placeholder="New Access Token"
+                                            value={dematRefreshToken}
+                                            onChange={(e) => setDematRefreshToken(e.target.value)}
+                                            className={`w-full mb-2 px-3 py-2 rounded border ${inputBg} ${inputBorder} text-sm`}
+                                        />
+                                        <div className="flex gap-2">
+                                            <button type="button" onClick={() => setShowDematRefreshForm(false)} className="px-3 py-1.5 rounded text-sm border border-current">Cancel</button>
+                                            <button type="button" onClick={handleRefreshDematToken} disabled={dematLoading} className="px-3 py-1.5 rounded text-sm bg-amber-600 text-white disabled:opacity-50">{dematLoading ? 'Updating...' : 'Update token'}</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
                         )}
                     </div>
 

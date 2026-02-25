@@ -223,6 +223,11 @@ export const authAPI = {
     }
   },
   logout: async () => {
+    try {
+      await api.post('/api/auth/logout');
+    } catch {
+      // Proceed even if backend unreachable so client still clears token
+    }
     return { success: true, message: 'Logout successful' };
   },
   checkStatus: async () => {

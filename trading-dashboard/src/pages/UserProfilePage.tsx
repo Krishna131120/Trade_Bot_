@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { userAPI } from '../services/api';
+import { userAPI, authAPI } from '../services/api';
 import { LogOut, User, Mail, Settings } from 'lucide-react';
 import Layout from '../components/Layout';
 
@@ -107,15 +107,14 @@ const UserProfilePage = () => {
   const handleConfirmLogout = async () => {
     setIsLoggingOut(true);
     try {
-      // Call logout (this clears local state)
+      await authAPI.logout();
       logout();
       showNotification('success', 'Logged Out', 'You have been successfully logged out.');
-      // Redirect to login
-      setTimeout(() => {
-        navigate('/');
-      }, 500);
+      setTimeout(() => navigate('/'), 500);
     } catch (error: any) {
-      showNotification('error', 'Logout Failed', error.message || 'Failed to logout.');
+      logout();
+      showNotification('success', 'Logged Out', 'You have been logged out.');
+      setTimeout(() => navigate('/'), 500);
     } finally {
       setIsLoggingOut(false);
     }

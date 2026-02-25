@@ -23,13 +23,15 @@ logger = logging.getLogger(__name__)
 
 
 class DualPortfolioManager:
-    """Manages separate portfolios for paper and live trading using SQLite database"""
+    """Manages separate portfolios for paper and live trading using SQLite database.
+    When user_id is set, all portfolio/trade data is scoped to that user."""
 
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: str = "data", user_id: Optional[str] = None):
         # Normalize to project-root data directory
         project_root = os.path.dirname(
             os.path.dirname(os.path.abspath(__file__)))
         self.data_dir = os.path.join(project_root, data_dir)
+        self.user_id = user_id  # None = legacy global; set = per-user
         self.current_mode = "paper"  # Default mode
         self.trade_callbacks = []  # List of callbacks to notify on trade execution
 
@@ -71,8 +73,7 @@ class DualPortfolioManager:
             # Check if we need to migrate from JSON first
             need_migration = False
             for mode in ["paper", "live"]:
-                portfolio = session.query(
-                    Portfolio).filter_by(mode=mode).first()
+                portfolio = session.query(Portfolio).filter_by(**self._portfolio_filter(mode)).first()
                 if not portfolio:
                     # Check if we have JSON data to migrate
                     json_file = os.path.join(
@@ -82,11 +83,10 @@ class DualPortfolioManager:
                         logger.info(
                             f"Found existing JSON data for {mode} mode")
                     else:
-                        # For live mode, we'll sync with Dhan later
-                        # For paper mode, use default values
                         initial_balance = 50000.0 if mode == "paper" else 0.0
                         portfolio = Portfolio(
                             mode=mode,
+                            user_id=self.user_id,
                             cash=initial_balance,
                             starting_balance=initial_balance,
                             realized_pnl=0.0,
@@ -121,9 +121,7 @@ class DualPortfolioManager:
 
             session.commit()
             logger.info("Loading mode after database initialization")
-            # Check if portfolio exists before attempting to load
-            portfolio_exists = session.query(Portfolio).filter_by(
-                mode=self.current_mode).first() is not None
+            portfolio_exists = session.query(Portfolio).filter_by(**self._portfolio_filter()).first() is not None
             if portfolio_exists:
                 self.load_mode(self.current_mode)
                 logger.info("Mode loaded successfully")
@@ -151,6 +149,14 @@ class DualPortfolioManager:
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
 
+    def _portfolio_filter(self, mode: Optional[str] = None) -> Dict[str, Any]:
+        """Return filter kwargs for Portfolio query (mode + user_id when set)."""
+        m = mode or self.current_mode
+        out = {"mode": m}
+        if self.user_id is not None:
+            out["user_id"] = self.user_id
+        return out
+
     def load_mode(self, mode: str) -> None:
         """Load portfolio and configuration for specified mode"""
         if mode not in ["paper", "live"]:
@@ -159,14 +165,13 @@ class DualPortfolioManager:
         self.current_mode = mode
         session = self.db.Session()
         try:
-            # Load portfolio from database
-            portfolio = session.query(Portfolio).filter_by(mode=mode).first()
+            portfolio = session.query(Portfolio).filter_by(**self._portfolio_filter(mode)).first()
             if not portfolio:
-                # Create portfolio if it doesn't exist
                 logger.info(f"Creating new {mode} portfolio")
-                initial_balance = 50000.0 if mode == "paper" else 100000.0  # Default balance
+                initial_balance = 50000.0 if mode == "paper" else 100000.0
                 portfolio = Portfolio(
                     mode=mode,
+                    user_id=self.user_id,
                     cash=initial_balance,
                     starting_balance=initial_balance,
                     realized_pnl=0.0,
@@ -174,7 +179,7 @@ class DualPortfolioManager:
                     last_updated=datetime.now()
                 )
                 session.add(portfolio)
-                session.flush()  # Get the ID without committing everything
+                session.flush()
 
             # Commit after setting the portfolio
             session.commit()
@@ -268,13 +273,12 @@ class DualPortfolioManager:
         session = None
         try:
             session = self.db.Session()
-            portfolio = session.query(Portfolio).filter_by(
-                mode=self.current_mode).first()
+            portfolio = session.query(Portfolio).filter_by(**self._portfolio_filter()).first()
 
             if not portfolio:
-                # Create portfolio if it doesn't exist
                 portfolio = Portfolio(
                     mode=self.current_mode,
+                    user_id=self.user_id,
                     cash=self.starting_balance if self.current_mode == "paper" else 100000.0,
                     starting_balance=self.starting_balance,
                     realized_pnl=0.0,
@@ -570,9 +574,7 @@ class DualPortfolioManager:
 
             session = self.db.Session()
             try:
-                # Delete all holdings and trades for the target portfolio
-                portfolio = session.query(Portfolio).filter_by(
-                    mode=target_mode).first()
+                portfolio = session.query(Portfolio).filter_by(**self._portfolio_filter(target_mode)).first()
                 if not portfolio:
                     raise ValueError(
                         f"Portfolio not found for mode: {target_mode}")
@@ -609,8 +611,7 @@ class DualPortfolioManager:
         """Update the cash balance in the current portfolio"""
         session = self.db.Session()
         try:
-            portfolio = session.query(Portfolio).filter_by(
-                mode=self.current_mode).first()
+            portfolio = session.query(Portfolio).filter_by(**self._portfolio_filter()).first()
             if portfolio:
                 portfolio.cash = float(new_cash)
                 portfolio.last_updated = datetime.now()
