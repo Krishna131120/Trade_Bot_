@@ -500,7 +500,7 @@ export default function HftPage() {
                         </div>
                         <div className="p-4 md:p-6 min-h-[400px]">
                             {/* Always show components regardless of trading mode or connection status */}
-                            {activeTab === 'dashboard' && <HftDashboard botData={botData} onPlaceOrder={handlePlaceOrder} onRefresh={refreshData} />}
+                            {activeTab === 'dashboard' && <HftDashboard botData={botData} botRunKey={botRunKey} onPlaceOrder={handlePlaceOrder} onRefresh={refreshData} />}
                             {activeTab === 'portfolio' && (
                                 <HftPortfolio
                                     botData={botData}

@@ -613,12 +613,24 @@ async def general_exception_handler(request, exc: Exception):
 trading_bot = None
 bot_thread = None
 bot_running = False
+_bot_initializing = False  # Global track if bot is in middle of initialize_bot()
 _continuous_loop_task: asyncio.Task = None  # Background continuous analysis loop
 
 
 def get_bot_running() -> bool:
     """Return current bot_running so heavy analysis can check it (e.g. when user clicks Stop)."""
     return bot_running
+
+
+@app.get("/api/bot/status")
+async def get_bot_status():
+    """Return current bot status for frontend polling."""
+    global bot_running, _bot_initializing, trading_bot
+    if _bot_initializing:
+        return {"status": "INITIALIZING"}
+    if bot_running and trading_bot:
+        return {"status": "READY"}
+    return {"status": "STOPPED"}
 
 
 # ── Bot-data cache (stale-while-revalidate) ─────────────────────────────────
@@ -1091,8 +1103,9 @@ def _start_continuous_loop():
 
 
 def _stop_continuous_loop():
-    """Cancel the continuous trading loop task."""
-    global _continuous_loop_task
+    """Cancel the continuous trading loop task and ensure bot_running is False."""
+    global _continuous_loop_task, bot_running
+    bot_running = False
     if _continuous_loop_task and not _continuous_loop_task.done():
         _continuous_loop_task.cancel()
         logger.info("⏹ Continuous trading loop cancelled")
@@ -3976,6 +3989,7 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
     async def run_analysis():
         """Run the heavy ML pipeline (stock_analyzer.analyze_stock) and emit result only when done.
         User must wait; Stop Bot is respected via get_bot_running()."""
+        global trading_bot
         loop = asyncio.get_event_loop()
         sym = symbol.strip().upper()
 
@@ -3983,10 +3997,47 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
             _emit({"type": "progress", "step": "Starting full analysis (may take a few minutes)", "pct": 5})
             _log_emit("INFO", f"🚀 Running heavy ML pipeline for {sym} — please wait...")
 
-            if not trading_bot or not getattr(trading_bot, "stock_analyzer", None):
-                _log_emit("WARNING", "Stock analyzer not available — ensure bot is started first.")
-                _emit({"type": "error", "message": "Stock analyzer not available"})
-                return
+            # If bot not initialized, initialize it now (blocking but necessary)
+            if not trading_bot:
+                _emit({"type": "progress", "step": "Initializing bot...", "pct": 5})
+                _log_emit("INFO", "🔄 Bot not initialized, initializing now...")
+                try:
+                    loop = asyncio.get_event_loop()
+                    trading_bot = await asyncio.wait_for(
+                        loop.run_in_executor(None, initialize_bot),
+                        timeout=180.0
+                    )
+                    if not trading_bot:
+                        _log_emit("ERROR", "Failed to initialize bot")
+                        _emit({"type": "error", "message": "Failed to initialize bot"})
+                    _log_emit("INFO", "✅ Bot initialized successfully")
+                except asyncio.TimeoutError:
+                    _log_emit("ERROR", "Bot initialization timed out")
+                    _emit({"type": "error", "message": "Bot initialization timed out"})
+                    return
+                except Exception as init_err:
+                    _log_emit("ERROR", f"Bot initialization failed: {init_err}")
+                    _emit({"type": "error", "message": f"Bot initialization failed: {init_err}"})
+                    return
+            
+            # If stock_analyzer not available, initialize it
+            if not getattr(trading_bot, "stock_analyzer", None):
+                _emit({"type": "progress", "step": "Initializing stock analyzer...", "pct": 10})
+                _log_emit("INFO", "🔄 Stock analyzer not found, initializing...")
+                try:
+                    from backend.hft2.backend.testindia import Stock
+                    config = trading_bot.config if hasattr(trading_bot, 'config') else {}
+                    trading_bot.stock_analyzer = Stock(
+                        reddit_client_id=config.get("reddit_client_id"),
+                        reddit_client_secret=config.get("reddit_client_secret"),
+                        reddit_user_agent=config.get("reddit_user_agent"),
+                        advanced_sentiment_analyzer=None
+                    )
+                    _log_emit("INFO", "✅ Stock analyzer initialized")
+                except Exception as sa_err:
+                    _log_emit("ERROR", f"Failed to initialize stock analyzer: {sa_err}")
+                    _emit({"type": "error", "message": f"Failed to initialize stock analyzer: {sa_err}"})
+                    return
 
             _emit({"type": "progress", "step": "Training models & ML pipeline", "pct": 20})
             _log_emit("INFO", "Training models, sentiment, and adversarial ML...")
@@ -4005,6 +4056,7 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                 return
             except asyncio.CancelledError:
                 _log_emit("INFO", "Analysis cancelled (Stop Bot)")
+                _emit({"type": "error", "message": "User interrupted the process"})
                 _emit({"type": "result", "data": {
                     "symbol": sym,
                     "recommendation": "HOLD",

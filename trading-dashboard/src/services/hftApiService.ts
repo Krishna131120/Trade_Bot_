@@ -67,10 +67,9 @@ api.interceptors.response.use(
 );
 
 export const hftApiService = {
-    // ===== Bot Status =====
-    async getStatus(): Promise<any> {
+    async getBotStatus(): Promise<{ status: 'INITIALIZING' | 'READY' | 'ERROR' | 'STOPPED' }> {
         try {
-            const response = await api.get('/status');
+            const response = await api.get<{ status: 'INITIALIZING' | 'READY' | 'ERROR' | 'STOPPED' }>('/bot/status');
             return response.data;
         } catch (error) {
             console.error('Error getting bot status:', error);

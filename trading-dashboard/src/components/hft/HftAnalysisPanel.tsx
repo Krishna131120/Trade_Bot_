@@ -29,6 +29,7 @@ interface AnalysisPanelProps {
     symbol: string;
     active: boolean;          // true = bot is running, false = idle
     onResult?: (result: AnalysisResult) => void;
+    botRunKey?: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ function indSignalLabel(sig: string) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResult }) => {
+const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResult, botRunKey = 0 }) => {
     const [progress, setProgress] = useState<{ step: string; pct: number } | null>(null);
     const [indicators, setIndicators] = useState<IndicatorEvent[]>([]);
     const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -71,17 +72,35 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
     const [error, setError] = useState<string | null>(null);
     const [showLogs, setShowLogs] = useState(false);
     const [connecting, setConnecting] = useState(false);
+    const [botStatus, setBotStatus] = useState<'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR' | 'STOPPED'>('IDLE');
+    const [botStatusMessage, setBotStatusMessage] = useState('');
+    const [botStatusCheck, setBotStatusCheck] = useState(0);
+    const [lastRunKey, setLastRunKey] = useState(botRunKey);
 
     const esRef = useRef<EventSource | null>(null);
-    const logRef = useRef<HTMLDivElement | null>(null);
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const startRef = useRef(false);
     const doneRef = useRef(false);
-    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const logRef = useRef<HTMLDivElement>(null);
 
-    // Auto-scroll logs
+    // Auto-refresh bot status
     useEffect(() => {
-        if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    }, [logs]);
+        const checkStatus = async () => {
+            try {
+                const response = await fetch(`${config.API_BASE_URL}/api/bot/status`);
+                if (!response.ok) throw new Error('Network error');
+                const data = await response.json();
+                setBotStatus(data.status);
+                setBotStatusMessage(data.message || '');
+            } catch (e) {
+                setBotStatus('ERROR');
+                setBotStatusMessage('Cannot reach bot status API');
+            }
+        };
+        const timer = setInterval(checkStatus, 3000);
+        checkStatus();
+        return () => clearInterval(timer);
+    }, [config.API_BASE_URL, botStatusCheck]);
 
     const resetState = useCallback(() => {
         setProgress(null);
@@ -94,7 +113,20 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
         doneRef.current = false;
     }, []);
 
+    // Force reset if botRunKey changes (new bot session)
+    useEffect(() => {
+        if (botRunKey !== lastRunKey) {
+            setLastRunKey(botRunKey);
+            startRef.current = false;
+            doneRef.current = false;
+            if (esRef.current) { esRef.current.close(); esRef.current = null; }
+            if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+            resetState();
+        }
+    }, [botRunKey, lastRunKey, resetState]);
+
     const startStream = useCallback(() => {
+        if (botStatus === 'INITIALIZING') return; // Wait for bot to be ready
         if (esRef.current) { esRef.current.close(); esRef.current = null; }
         if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
         resetState();
@@ -213,9 +245,14 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
                         ⏳ Connecting…
                     </span>
                 )}
-                {active && !done && !connecting && (
+                {active && !done && !connecting && botStatus === 'READY' && (
                     <span style={{ fontSize: '0.75rem', color: '#79c0ff', marginLeft: 'auto', animation: 'pulse 1.5s infinite' }}>
                         ● Live Analysis Running
+                    </span>
+                )}
+                {active && botStatus === 'INITIALIZING' && (
+                    <span style={{ fontSize: '0.75rem', color: '#f39c12', marginLeft: 'auto' }}>
+                        ⏳ Initializing Bot…
                     </span>
                 )}
                 {done && (

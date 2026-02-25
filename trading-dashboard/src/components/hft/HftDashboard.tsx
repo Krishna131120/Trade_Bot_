@@ -219,11 +219,12 @@ type TimePeriod = '1D' | '1M' | '1Y' | 'All';
 
 interface HftDashboardProps {
     botData: HftBotData;
+    botRunKey?: number;
     onPlaceOrder?: (symbol: string, side: 'BUY' | 'SELL', quantity: number) => Promise<void>;
     onRefresh?: () => Promise<void>;
 }
 
-const HftDashboard: React.FC<HftDashboardProps> = ({ botData, onPlaceOrder, onRefresh }) => {
+const HftDashboard: React.FC<HftDashboardProps> = ({ botData, botRunKey = 0, onPlaceOrder, onRefresh }) => {
     const { theme } = useTheme();
     const isLight = theme === 'light';
     const [timePeriod, setTimePeriod] = useState<TimePeriod>('1M');
