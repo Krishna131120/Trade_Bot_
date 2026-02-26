@@ -12,6 +12,7 @@ import time
 import logging
 import asyncio
 import threading
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
@@ -85,7 +86,15 @@ class FyersDataService:
     """Standalone Fyers data service"""
     
     def __init__(self):
-        self.app = FastAPI(title="Fyers Data Service", version="1.0.0")
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            logger.info("Initializing Fyers Data Service Resources")
+            await self.startup_event()
+            yield
+            logger.info("Cleaning up Fyers Data Service Resources")
+            await self.shutdown_event()
+
+        self.app = FastAPI(title="Fyers Data Service", version="1.0.0", lifespan=lifespan)
         self.setup_cors()
         self.setup_routes()
         
@@ -588,15 +597,6 @@ class FyersDataService:
 
 # Global service instance
 service = FyersDataService()
-
-# Add startup and shutdown events
-@service.app.on_event("startup")
-async def startup():
-    await service.startup_event()
-
-@service.app.on_event("shutdown")
-async def shutdown():
-    await service.shutdown_event()
 
 def main():
     """Main entry point"""

@@ -16,6 +16,7 @@ import {
 import { Line, Doughnut } from 'react-chartjs-2';
 import type { HftBotData } from '../../types/hft';
 import { formatCurrency } from '../../services/hftApiService';
+import HftAnalysisPanel from './HftAnalysisPanel';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, ArcElement, Filler);
 
@@ -652,6 +653,21 @@ const HftDashboard: React.FC<HftDashboardProps> = ({ botData, botRunKey = 0, onP
                     )}
                 </AnalysisPanel>
 
+                {/* Bot Analysis Section */}
+                <div style={{ marginTop: '10px' }}>
+                    <h3 style={{ marginBottom: '15px', color: isLight ? '#2c3e50' : '#e2e8f0', fontSize: '1.2rem', fontWeight: 600 }}>Live Analysis Streams</h3>
+                    {!botData.isRunning && (
+                        <NoAnalysisMsg>Press Start Bot to run live AI analysis for your watchlist tickers.</NoAnalysisMsg>
+                    )}
+                    {botData.config?.tickers?.map(ticker => (
+                        <HftAnalysisPanel
+                            key={`${ticker}-${botRunKey}`}
+                            symbol={ticker}
+                            active={botData.isRunning}
+                            botRunKey={botRunKey}
+                        />
+                    ))}
+                </div>
 
             </DashboardContainer>
         </div>

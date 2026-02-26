@@ -53,3 +53,4 @@ praw>=7.7.0
 gymnasium
 gnews
 catboost
+selenium

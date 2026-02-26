@@ -17,6 +17,7 @@ import socket
 import subprocess
 import platform
 import asyncio
+from contextlib import asynccontextmanager
 
 # Fix import paths permanently - MOVED TO TOP
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -512,13 +513,21 @@ except Exception as e:
 # Logout blacklist: tokens added here are rejected until server restart (client must discard token)
 _logout_blacklist = set()
 
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    # Call the defined events in the global scope
+    await startup_event()
+    yield
+    await shutdown_event()
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Indian Stock Trading Bot API",
     description="REST API for the Indian Stock Trading Bot Web Interface",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=app_lifespan
 )
 
 # Add CORS middleware - MUST be added before routes
@@ -705,7 +714,7 @@ def _offline_bot_data():
     except Exception:
         pass
     return {
-        "isRunning": False,
+        "isRunning": bot_running or _bot_initializing,
         "config": {
             "mode": saved.get("mode", "paper"),
             "tickers": saved.get("tickers", []),
@@ -738,6 +747,7 @@ groq_engine = None
 # Each analyze_stock call takes 2-3 min; running multiple in parallel saturates the thread pool
 # and causes /api/bot-data and /api/trades to time out while waiting for a free thread.
 _analysis_semaphore = asyncio.Semaphore(1)
+_active_analysis_tasks = set()  # Track active ticker analysis tasks
 
 # Stores latest analysis results per symbol, exposed via /bot-data to the frontend
 _last_bot_analysis: dict = {}
@@ -832,7 +842,7 @@ def _build_sse_snapshot() -> dict:
                 )
                 total_value = cash + market_val
             return {
-                "isRunning": bot_data.get("isRunning", False),
+                "isRunning": bot_data.get("isRunning", False) or _bot_initializing,
                 "cash": cash,
                 "totalValue": round(total_value, 2),
                 "unrealizedPnL": portfolio.get("unrealizedPnL", 0),
@@ -843,7 +853,7 @@ def _build_sse_snapshot() -> dict:
     except Exception:
         pass
     return {
-        "isRunning": False,
+        "isRunning": bot_running or _bot_initializing,
         "cash": 0,
         "totalValue": 0,
         "unrealizedPnL": 0,
@@ -855,10 +865,21 @@ def _build_sse_snapshot() -> dict:
 async def trigger_all_hft2_components_for_symbol(symbol: str):
     """Reusable async function to trigger all HFT2 backend components (predictions, analysis, data fetching) for a symbol.
     Runs with a semaphore so only one ticker's full ML pipeline executes at a time."""
+    # Register this task for cancellation tracking
+    current_task = asyncio.current_task()
+    if current_task:
+        _active_analysis_tasks.add(current_task)
+        current_task.add_done_callback(lambda t: _active_analysis_tasks.discard(t) if t in _active_analysis_tasks else None)
+
     # Acquire semaphore: only 1 analysis at a time to avoid saturating the thread pool
     async with _analysis_semaphore:
         try:
+            if not bot_running:
+                logger.info(f"⏹ Aborting HFT2 process for {symbol} - bot not running")
+                return
+
             logger.info(f"🚀 Starting HFT2 backend process for {symbol}...")
+            if not bot_running: return
             prediction_result = None
             analysis_result = None
             
@@ -869,7 +890,8 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                 if fyers:
                     try:
                         # Get current price from Fyers
-                        current_price = fyers.get_price(symbol)
+                        loop = asyncio.get_event_loop()
+                        current_price = await loop.run_in_executor(None, fyers.get_price, symbol)
                         if current_price:
                             logger.info(f"✅ Fetched live price from Fyers for {symbol}: ₹{current_price}")
                     except Exception as fyers_err:
@@ -896,6 +918,7 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                 logger.warning(f"⚠️ Yahoo Finance historical data fetch failed: {yahoo_err}")
             
             # 3. Trigger MCP prediction if available
+            if not bot_running: return
             if MCP_AVAILABLE:
                 await _ensure_mcp_initialized()
                 if mcp_trading_agent:
@@ -909,6 +932,7 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                             "ollama_model": "llama3.1:8b"
                         })
                         session_id = str(int(time.time() * 1000000))
+                        # Prediction Tool is already an async class
                         pred_result = await prediction_tool.rank_predictions({
                             "symbols": [symbol],
                             "models": ["rl"],
@@ -926,6 +950,7 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
                         logger.exception("Prediction error traceback:")
             
             # 4. Trigger comprehensive analysis if available
+            if not bot_running: return
             if MCP_AVAILABLE and mcp_trading_agent:
                 try:
                     logger.info(f"🔍 Triggering comprehensive analysis for {symbol}...")
@@ -1104,12 +1129,28 @@ def _start_continuous_loop():
 
 def _stop_continuous_loop():
     """Cancel the continuous trading loop task and ensure bot_running is False."""
-    global _continuous_loop_task, bot_running
+    global _continuous_loop_task, bot_running, _active_analysis_tasks, _last_bot_analysis, _bot_data_cache, _bot_initializing
     bot_running = False
+    _bot_initializing = False
+    
+    # 1. Cancel the main continuous loop task
     if _continuous_loop_task and not _continuous_loop_task.done():
         _continuous_loop_task.cancel()
         logger.info("⏹ Continuous trading loop cancelled")
     _continuous_loop_task = None
+
+    # 2. Cancel all active analysis background tasks
+    if _active_analysis_tasks:
+        logger.info(f"⏹ Cancelling {len(_active_analysis_tasks)} active analysis tasks")
+        for task in _active_analysis_tasks:
+            if not task.done():
+                task.cancel()
+        _active_analysis_tasks.clear()
+
+    # 3. Clear analysis cache to return to "fresh" state
+    _last_bot_analysis.clear()
+    _bot_data_cache.clear()
+    logger.info("🧹 Bot analysis cache cleared")
 
 
 async def get_real_time_market_response(message: str) -> Optional[str]:
@@ -4025,13 +4066,20 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                 _emit({"type": "progress", "step": "Initializing stock analyzer...", "pct": 10})
                 _log_emit("INFO", "🔄 Stock analyzer not found, initializing...")
                 try:
-                    from backend.hft2.backend.testindia import Stock
+                    from testindia import Stock
                     config = trading_bot.config if hasattr(trading_bot, 'config') else {}
-                    trading_bot.stock_analyzer = Stock(
-                        reddit_client_id=config.get("reddit_client_id"),
-                        reddit_client_secret=config.get("reddit_client_secret"),
-                        reddit_user_agent=config.get("reddit_user_agent"),
-                        advanced_sentiment_analyzer=None
+                    
+                    def init_stock_analyzer():
+                        return Stock(
+                            reddit_client_id=config.get("reddit_client_id"),
+                            reddit_client_secret=config.get("reddit_client_secret"),
+                            reddit_user_agent=config.get("reddit_user_agent"),
+                            advanced_sentiment_analyzer=None
+                        )
+                    
+                    trading_bot.stock_analyzer = await asyncio.wait_for(
+                        loop.run_in_executor(None, init_stock_analyzer),
+                        timeout=120.0
                     )
                     _log_emit("INFO", "✅ Stock analyzer initialized")
                 except Exception as sa_err:
@@ -4039,17 +4087,42 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                     _emit({"type": "error", "message": f"Failed to initialize stock analyzer: {sa_err}"})
                     return
 
-            _emit({"type": "progress", "step": "Training models & ML pipeline", "pct": 20})
-            _log_emit("INFO", "Training models, sentiment, and adversarial ML...")
-
-            def run_heavy():
-                return trading_bot.stock_analyzer.analyze_stock(sym, bot_running=get_bot_running)
-
+            _emit({"type": "progress", "step": "Waiting for ML pipeline...", "pct": 19})
+            
+            # Use file polling to prevent duplicate thread starvation!
+            # The testindia.py thread will produce JSON files in stock_analysis/
+            sanitized_sym = sym.replace(".", "_")
+            pattern = os.path.join(os.path.dirname(__file__), "stock_analysis", f"{sanitized_sym}_analysis_*.json")
+            
             try:
-                raw = await asyncio.wait_for(
-                    loop.run_in_executor(None, run_heavy),
-                    timeout=600.0
-                )
+                _emit({"type": "progress", "step": "Waiting for background ML output...", "pct": 20})
+                _log_emit("INFO", f"Tracking live analysis output from backend generator for {sym}...")
+                
+                start_time = time.time()
+                found_raw = None
+                
+                while get_bot_running() and (time.time() - start_time) < 600:
+                    await asyncio.sleep(2)
+                    
+                    # Check for recent file
+                    import glob
+                    files = glob.glob(pattern)
+                    if files:
+                        latest_file = max(files, key=os.path.getmtime)
+                        # Ensure it's a recently generated file (last 15 minutes) to avoid stale data
+                        if time.time() - os.path.getmtime(latest_file) < 900:
+                            try:
+                                with open(latest_file, 'r', encoding='utf-8') as f:
+                                    found_raw = json.load(f)
+                                _log_emit("INFO", f"✅ Successfully loaded analysis from {os.path.basename(latest_file)}")
+                                break
+                            except Exception as e:
+                                _log_emit("WARNING", f"Found analysis file but failed to read: {e}")
+                
+                raw = found_raw
+                if not raw and get_bot_running():
+                    raise asyncio.TimeoutError()
+                    
             except asyncio.TimeoutError:
                 _log_emit("ERROR", "Analysis timed out (10 min)")
                 _emit({"type": "error", "message": "Analysis timed out"})
@@ -4103,7 +4176,11 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
             confidence = float(ml.get("confidence", 0.5))
             if confidence > 1.0:
                 confidence = confidence / 100.0
-            current_price = float(stock_data.get("current_price") or 0)
+            cp_raw = stock_data.get("current_price")
+            if isinstance(cp_raw, dict):
+                current_price = float(cp_raw.get("INR") or cp_raw.get("USD") or 0)
+            else:
+                current_price = float(cp_raw or 0)
             support = float(stock_data.get("support_level") or 0)
             resistance = float(stock_data.get("resistance_level") or 0)
             target_price = None
@@ -4160,17 +4237,25 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
     async def event_generator():
         # Fire analysis in background so SSE loop can drain the queue
         analysis_task = asyncio.create_task(run_analysis())
+        last_ping_time = asyncio.get_event_loop().time()
         try:
             yield f"data: {json.dumps({'type': 'connected', 'symbol': symbol.strip().upper()})}\n\n"
             while not analysis_task.done() or not event_q.empty():
                 if await request.is_disconnected():
                     analysis_task.cancel()
                     break
+                
+                now = asyncio.get_event_loop().time()
+                if now - last_ping_time >= 15.0:
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+                    last_ping_time = now
+                
                 drained = 0
                 while drained < 30:
                     try:
                         yield event_q.get_nowait()
                         drained += 1
+                        last_ping_time = asyncio.get_event_loop().time()
                     except Exception:
                         break
                 await asyncio.sleep(0.15)
@@ -5199,10 +5284,11 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
             
             async def init_bot_background():
                 """Initialize bot in background, then start it and trigger predictions for watchlist."""
-                global trading_bot, _bot_initializing
+                global trading_bot, _bot_initializing, _bot_data_cache
                 logger.info("🚀 init_bot_background() async function STARTED")
                 try:
                     _bot_initializing = True
+                    _bot_data_cache = {} # Invalidate cache to force offline data which returns isRunning=True
                     logger.info("🚀 Set _initializing flag to True")
                     loop = asyncio.get_event_loop()
                     logger.info("🔄 About to run initialize_bot() in executor...")
@@ -5230,6 +5316,10 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
                         bot_instance = None
                     
                     # CRITICAL: Explicitly set the global variable after executor completes
+                    if not _bot_initializing:
+                        logger.info("⏹ Bot initialization was cancelled. Aborting startup.")
+                        return
+
                     if bot_instance:
                         trading_bot = bot_instance
                         logger.info(f"✅ Bot initialized successfully in background - trading_bot is set: {type(trading_bot).__name__}")
@@ -5263,10 +5353,11 @@ async def start_bot(payload: dict = Depends(get_optional_user)):
                         await loop.run_in_executor(None, trading_bot.start)
                         tickers_list = trading_bot.config.get("tickers", [])
                         logger.info(f"🚀 Bot started in background with {len(tickers_list)} tickers: {tickers_list}")
-                        # Start the continuous loop — it will process all tickers sequentially
-                        _start_continuous_loop()
                         global bot_running
                         bot_running = True
+                        _bot_data_cache = {} # Force refresh of live data on next /api/bot-data request
+                        # Start the continuous loop — it will process all tickers sequentially
+                        _start_continuous_loop()
                         logger.info(f"✅ Continuous trading loop task created")
                 except Exception as init_error:
                     logger.error(f"❌ Background bot initialization failed: {init_error}")
@@ -7185,7 +7276,6 @@ def _do_blocking_bot_init():
         trading_bot = None
 
 
-@app.on_event("startup")
 async def startup_event():
     """Initialize the trading bot on startup - NON-BLOCKING: all heavy work runs in thread."""
     global trading_bot
@@ -7367,7 +7457,6 @@ async def get_monitoring_stats():
             status_code=500, detail="Error retrieving monitoring data")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     """Architectural Fix: Comprehensive resource cleanup on shutdown"""
     global trading_bot, mcp_server, fyers_client, groq_engine

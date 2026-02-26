@@ -126,7 +126,6 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
     }, [botRunKey, lastRunKey, resetState]);
 
     const startStream = useCallback(() => {
-        if (botStatus === 'INITIALIZING') return; // Wait for bot to be ready
         if (esRef.current) { esRef.current.close(); esRef.current = null; }
         if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
         resetState();
@@ -197,9 +196,9 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
         setProgress(null); setIndicators([]); setResult(null); setLogs([]); setDone(false); setError(null); setConnecting(false);
     }, [symbol]);
 
-    // Start/stop stream when active flips
+    // Start/stop stream when active flips or botStatus changes to READY
     useEffect(() => {
-        if (active && !startRef.current) {
+        if (active && botStatus !== 'INITIALIZING' && !startRef.current) {
             startRef.current = true;
             startStream();
         }
@@ -211,12 +210,17 @@ const HftAnalysisPanel: React.FC<AnalysisPanelProps> = ({ symbol, active, onResu
             setDone(false);
             setProgress(null);
             setError(null);
+            if (esRef.current) { esRef.current.close(); esRef.current = null; }
         }
+    }, [active, botStatus, startStream]);
+
+    // Cleanup on unmount
+    useEffect(() => {
         return () => {
             if (esRef.current) { esRef.current.close(); esRef.current = null; }
             if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
         };
-    }, [active, startStream]);
+    }, []);
 
     const rec = result?.recommendation ?? 'HOLD';
     const colors = SIGNAL_COLORS[rec] ?? SIGNAL_COLORS.HOLD;

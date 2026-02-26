@@ -43,9 +43,9 @@ export const HealthProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       setIsPolling(true);
       const result = await stockAPI.health();
-      
+
       setHealth({
-        healthy: result.status === 'ok' || result.status === 'healthy' || result.healthy === true,
+        healthy: result.status === 'ok' || result.status === 'healthy' || result.status === 'degraded' || result.healthy === true,
         status: result.status || 'unknown',
         timestamp: new Date(),
         message: result.message,

@@ -5481,6 +5481,8 @@ class Stock:
 
                         # 1. XGBoost - Best for tabular financial data
                         if 'xgb' in ml_libraries_available:
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Training XGBoost model...")
                                 xgb_model = ml_libraries_available['xgb'].XGBRegressor(
@@ -5503,6 +5505,8 @@ class Stock:
 
                         # 2. LightGBM - Fast gradient boosting
                         if 'lgb' in ml_libraries_available:
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Training LightGBM model...")
                                 lgb_model = ml_libraries_available['lgb'].LGBMRegressor(
@@ -5526,6 +5530,8 @@ class Stock:
 
                         # 3. CatBoost - Categorical features handling
                         if 'cb' in ml_libraries_available:
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Training CatBoost model...")
                                 cb_model = ml_libraries_available['cb'].CatBoostRegressor(
@@ -5546,6 +5552,8 @@ class Stock:
 
                         # 4. Extra Trees - Extremely randomized trees
                         if ml_libraries_available.get('sklearn', False):
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Training Extra Trees model...")
                                 et_model = ExtraTreesRegressor(
@@ -5566,6 +5574,8 @@ class Stock:
 
                         # 5. Support Vector Regression - Non-linear patterns
                         if ml_libraries_available.get('sklearn', False):
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Training SVR model...")
                                 svr_model = SVR(
@@ -5584,6 +5594,8 @@ class Stock:
 
                         # 6. Multi-layer Perceptron - Neural network
                         if ml_libraries_available.get('sklearn', False):
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Training MLP Neural Network...")
                                 mlp_model = MLPRegressor(
@@ -5606,6 +5618,8 @@ class Stock:
 
                         # INDUSTRY LEVEL: ADVANCED ENSEMBLE METHODS
                         if len(models) > 1 and ml_libraries_available.get('sklearn', False):
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info(
                                     "Creating advanced ensemble models...")
@@ -5629,6 +5643,8 @@ class Stock:
 
                         # Stacking Regressor with top models (if we have enough models)
                         if len(models) >= 3 and ml_libraries_available.get('sklearn', False):
+                            if not _br():
+                                return {"success": False, "message": "Bot stopped during analysis"}
                             try:
                                 logger.info("Creating stacking ensemble...")
                                 from sklearn.ensemble import StackingRegressor

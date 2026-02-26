@@ -12,7 +12,7 @@ import HftSettingsModal from '@/components/hft/HftSettingsModal';
 import { hftApiService, formatCurrency, formatPercentage, createBotStream } from '@/services/hftApiService';
 import { userAPI } from '@/services/api';
 import type { HftBotData, HftChatMessage } from '@/types/hft';
-import { CheckCircle2, AlertCircle, RefreshCw, Play, Square, LayoutDashboard, Briefcase, MessageCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, RefreshCw, Play, Square, LayoutDashboard, Briefcase, MessageCircle, Loader2 } from 'lucide-react';
 
 export default function HftPage() {
     const { theme } = useTheme();
@@ -44,6 +44,22 @@ export default function HftPage() {
     const [connected, setConnected] = useState(false);
     /** Incremented on Start Bot so analysis panels remount and never show cached/previous output. */
     const [botRunKey, setBotRunKey] = useState(0);
+    const [globalBotStatus, setGlobalBotStatus] = useState<'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR' | 'STOPPED'>('IDLE');
+
+    // Poll for bot status separately
+    useEffect(() => {
+        const checkStatus = async () => {
+            try {
+                const res = await hftApiService.getBotStatus();
+                setGlobalBotStatus(res.status);
+            } catch (e) {
+                // Silent catch for polling
+            }
+        };
+        checkStatus();
+        const interval = setInterval(checkStatus, 3000);
+        return () => clearInterval(interval);
+    }, []);
 
     // SSE stream: connect once and keep alive; also do an initial REST load
     useEffect(() => {
@@ -227,6 +243,7 @@ export default function HftPage() {
             setBotRunKey(k => k + 1);
             // 5. Mark as running so panels show "Processing" until backend finishes
             setBotData(prev => ({ ...prev, isRunning: true }));
+            setGlobalBotStatus('INITIALIZING');
             toast.success('Bot started! Wait for analysis to finish before results appear.');
             // 6. Refresh after a short delay to pick up backend state
             setTimeout(() => refreshData(), 3000);
@@ -457,10 +474,14 @@ export default function HftPage() {
                     <div className="flex flex-wrap gap-2">
                         <button
                             onClick={handleStartBot}
-                            disabled={botData.isRunning}
+                            disabled={botData.isRunning || globalBotStatus === 'INITIALIZING'}
                             className="flex items-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition-all"
                         >
-                            <Play className="w-4 h-4" /> Start Bot
+                            {globalBotStatus === 'INITIALIZING' ? (
+                                <><Loader2 className="w-4 h-4 animate-spin" /> Initializing...</>
+                            ) : (
+                                <><Play className="w-4 h-4" /> Start Bot</>
+                            )}
                         </button>
                         <button
                             onClick={handleStopBot}
