@@ -2751,7 +2751,7 @@ class Stock:
             benchmark_tickers=self.config.get("benchmark_tickers", ["^NSEI"]),
             prediction_days=self.config.get("prediction_days", 30),
             training_period=self.config.get("period", "1y"),
-            bot_running=lambda: self.bot_running
+            bot_running=self.bot_running
         )
 
         # Validate ML models if ML interface is available
@@ -5923,6 +5923,51 @@ class Stock:
                             }
                         }
 
+                        # ===== WRITE SIGNAL FILE (matches terminal output exactly) =====
+                        try:
+                            import json as _json_mod
+                            _sanitized_ticker = ticker.replace(".", "_")
+                            _signal_dir = os.path.join(os.path.dirname(__file__), "stock_analysis")
+                            os.makedirs(_signal_dir, exist_ok=True)
+                            _signal_path = os.path.join(_signal_dir, f"{_sanitized_ticker}_signal.json")
+                            _rl_rec = rl_result.get("recommendation", "HOLD")
+                            _pred_change = prediction_direction
+                            # RL recommendation is the primary signal (same as ml_logs.txt)
+                            if _rl_rec == "BUY":
+                                _final_action = "BUY"
+                            elif _rl_rec == "SELL":
+                                _final_action = "SELL"
+                            else:
+                                if _pred_change > 0.02:
+                                    _final_action = "BUY"
+                                elif _pred_change < -0.02:
+                                    _final_action = "SELL"
+                                else:
+                                    _final_action = "HOLD"
+                            _signal_data = {
+                                "ticker": ticker,
+                                "action": _final_action,
+                                "rl_recommendation": _rl_rec,
+                                "current_price": float(current_price),
+                                "predicted_price": float(ensemble_pred),
+                                "prediction_direction_pct": round(_pred_change * 100, 2),
+                                "confidence_score": round(abs(float(r2)) if r2 else 0.5, 4),
+                                "rl_performance_pct": rl_result.get("performance_pct", 0.0),
+                                "rl_average_reward": rl_result.get("average_reward", 0.0),
+                                "rl_actions": rl_result.get("actions", {}),
+                                "reasoning": f"RL: {_rl_rec}. ML predicted change: {round(_pred_change * 100, 2)}%. Best model: {best_model_name}.",
+                                "stop_loss": round(float(current_price) * 0.95, 2),
+                                "take_profit": round(float(ensemble_pred), 2),
+                                "source": "analyze_stock_rl_output",
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                            with open(_signal_path, "w", encoding="utf-8") as _sf:
+                                _json_mod.dump(_signal_data, _sf, indent=2)
+                            logger.info(f"✅ Signal file written: {_sanitized_ticker}_signal.json | Action={_final_action} | RL={_rl_rec}")
+                        except Exception as _sig_write_err:
+                            logger.error(f"Failed to write signal file for {ticker}: {_sig_write_err}")
+                        # ===== END WRITE SIGNAL FILE =====
+
             result = {
                 "success": True,
                 "stock_data": stock_data,
@@ -6892,6 +6937,38 @@ class StockTradingBot:
             logger.error(f"Error checking NSE market status: {e}")
             return False
 
+    def _write_trade_signal(self, ticker: str, action: str, current_price: float,
+                            confidence: float, reasoning: str,
+                            stop_loss: float = 0.0, take_profit: float = 0.0,
+                            market_regime: str = "UNKNOWN", qty: int = 0,
+                            dynamic_weights: dict = None, output_dir: str = "stock_analysis"):
+        """Write the professional trading decision to a JSON file for frontend consumption."""
+        try:
+            import json
+            import os
+            os.makedirs(output_dir, exist_ok=True)
+            sanitized = ticker.replace(".", "_")
+            signal_file = os.path.join(output_dir, f"{sanitized}_signal.json")
+            signal = {
+                "ticker": ticker,
+                "action": action.upper(),
+                "current_price": current_price,
+                "confidence_score": round(confidence, 4),
+                "reasoning": reasoning,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "market_regime": market_regime,
+                "qty": qty,
+                "dynamic_weights": dynamic_weights or {},
+                "source": "professional_buy_sell_logic",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            with open(signal_file, "w", encoding="utf-8") as f:
+                json.dump(signal, f, indent=2)
+            logger.info(f"📄 Trade signal written to {signal_file}")
+        except Exception as e:
+            logger.error(f"Failed to write trade signal for {ticker}: {e}")
+
     def make_trading_decision(self, analysis):
         """Crystal clear trading decision logic - no fallbacks, pure professional logic"""
         if not analysis.get("success"):
@@ -6972,7 +7049,7 @@ class StockTradingBot:
                         )
                         logger.info(
                             f"✅ SELL ORDER EXECUTED: {sell_qty} {ticker} at Rs.{current_price:.2f}")
-                        return {
+                        sell_result = {
                             "action": "sell",
                             "ticker": ticker,
                             "qty": sell_qty,
@@ -6981,6 +7058,17 @@ class StockTradingBot:
                             "confidence_score": sell_decision.get("confidence_score", 0.0),
                             "reason": "professional_sell"
                         }
+                        self._write_trade_signal(
+                            ticker=ticker,
+                            action="SELL",
+                            current_price=current_price,
+                            confidence=sell_decision.get("confidence_score", 0.0),
+                            reasoning=sell_decision.get("professional_reasoning", sell_decision.get("reason", "professional_sell")),
+                            stop_loss=sell_decision.get("stop_loss", 0.0),
+                            take_profit=sell_decision.get("take_profit", 0.0),
+                            qty=sell_qty
+                        )
+                        return sell_result
                     else:
                         logger.info(
                             f"⚠️  SELL SIGNAL INVALID: Insufficient quantity or invalid parameters")
@@ -7096,7 +7184,7 @@ class StockTradingBot:
                             logger.error(
                                 f"Database live trade failed: {failure_msg}")
 
-                        return {
+                        buy_result = {
                             "action": "buy",
                             "ticker": ticker,
                             "qty": buy_qty,
@@ -7107,6 +7195,19 @@ class StockTradingBot:
                             "market_regime": market_regime,
                             "dynamic_weights": dynamic_weights
                         }
+                        self._write_trade_signal(
+                            ticker=ticker,
+                            action="BUY",
+                            current_price=current_price,
+                            confidence=buy_decision.get("confidence_score", 0.0),
+                            reasoning=buy_decision.get("professional_reasoning", buy_decision.get("reason", "professional_buy")),
+                            stop_loss=buy_decision.get("stop_loss", current_price * 0.95),
+                            take_profit=buy_decision.get("take_profit", current_price * 1.15),
+                            market_regime=market_regime,
+                            qty=buy_qty,
+                            dynamic_weights=dynamic_weights
+                        )
+                        return buy_result
                     else:
                         logger.info(
                             f"⚠️  BUY SIGNAL INVALID: Insufficient cash or invalid parameters")
@@ -7160,6 +7261,14 @@ class StockTradingBot:
             logger.info(
                 f"      - Entry Price: Rs.{holding_info.get('avg_price', 0.0):.2f}")
         logger.info(f"=== END TRADING DECISION FOR {ticker} ===")
+        self._write_trade_signal(
+            ticker=ticker,
+            action="HOLD",
+            current_price=current_price,
+            confidence=0.5,
+            reasoning="No clear buy or sell signal from professional logic",
+            market_regime=market_regime if 'market_regime' in dir() else "UNKNOWN"
+        )
         return {
             "action": "hold",
             "ticker": ticker,
@@ -9070,7 +9179,7 @@ class StockTradingBot:
             benchmark_tickers=self.config.get("benchmark_tickers", ["^NSEI"]),
             prediction_days=self.config.get("prediction_days", 30),
             training_period=self.config.get("period", "1y"),
-            bot_running=lambda: self.bot_running
+            bot_running=self.bot_running
         )
 
         # Validate ML models if ML interface is available

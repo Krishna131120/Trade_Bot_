@@ -405,17 +405,48 @@ export const hftApiService = {
     }> {
         try {
             const response = await api.get(`/analysis-result?symbol=${encodeURIComponent(symbol)}`, {
-                // 30-second timeout — backend is busy during ML analysis.
-                // The endpoint is non-blocking (run_in_executor) so it will
-                // respond quickly once the thread pool picks it up.
                 timeout: 30000,
             });
-            return response.data;
+            const result = response.data;
+
+            // --- OVERRIDE: fetch the professional signal file written by analyze_stock ---
+            // This file is written immediately after RL analysis in testindia.py
+            // and contains the EXACT BUY/SELL/HOLD that appears in the terminal output.
+            if (result?.status === 'ready' && result?.data) {
+                try {
+                    const sigResp = await api.get(`/trade-signal?symbol=${encodeURIComponent(symbol)}`, {
+                        timeout: 5000,
+                    });
+                    const sig = sigResp.data;
+                    if (sig?.success && sig?.action && ['BUY', 'SELL', 'HOLD'].includes(sig.action)) {
+                        // Directly override the recommendation and reasoning in the result data
+                        result.data.recommendation = sig.action;
+                        if (sig.confidence_score !== undefined && sig.confidence_score >= 0 && sig.confidence_score <= 1) {
+                            result.data.confidence = sig.confidence_score;
+                        }
+                        if (sig.reasoning) {
+                            result.data.reasoning = `[RL: ${sig.rl_recommendation ?? sig.action}] ${sig.reasoning}`;
+                        }
+                        if (sig.stop_loss && sig.stop_loss > 0) {
+                            result.data.stop_loss = sig.stop_loss;
+                        }
+                        if (sig.take_profit && sig.take_profit > 0) {
+                            result.data.target_price = sig.take_profit;
+                        }
+                        console.log(`[HFT API] Professional signal loaded for ${symbol}: ${sig.action} (RL: ${sig.rl_recommendation})`);
+                    }
+                } catch (_sigErr) {
+                    // Signal file not yet available — use the base analysis result as-is
+                    console.log(`[HFT API] No professional signal file for ${symbol} yet`);
+                }
+            }
+            return result;
         } catch (error) {
             console.error('Error getting analysis result:', error);
             return { status: 'error', message: 'Request failed' };
         }
     },
+
 
     // ===== Auto-Execute Signal =====
     async executeSignal(symbol: string, username: string, force: boolean = false): Promise<{

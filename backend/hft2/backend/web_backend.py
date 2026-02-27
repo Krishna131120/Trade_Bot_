@@ -4010,6 +4010,34 @@ async def get_configuration_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/trade-signal")
+async def get_trade_signal(symbol: str = "INFY.NS"):
+    """Return the latest professional trading signal for a symbol.
+    
+    This reads the {TICKER}_signal.json file written by execute_trading_decisions
+    every time the bot makes a BUY, SELL, or HOLD decision — so it always matches
+    the terminal output exactly.
+    """
+    try:
+        sym = symbol.strip().upper()
+        sanitized = sym.replace(".", "_")
+        signal_path = os.path.join(
+            os.path.dirname(__file__), "stock_analysis",
+            f"{sanitized}_signal.json"
+        )
+        if not os.path.exists(signal_path):
+            return {"success": False, "message": f"No signal file found for {sym}. Bot may not have evaluated this ticker yet."}
+        file_age_seconds = time.time() - os.path.getmtime(signal_path)
+        with open(signal_path, "r", encoding="utf-8") as f:
+            signal = json.load(f)
+        signal["file_age_seconds"] = round(file_age_seconds, 1)
+        signal["success"] = True
+        return signal
+    except Exception as e:
+        logger.error(f"Failed to load trade signal for {symbol}: {e}")
+        return {"success": False, "message": str(e)}
+
+
 @app.get("/api/analyze-stream")
 async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
     """SSE endpoint: run full HFT2 analysis pipeline for a symbol and stream structured events.
@@ -4203,6 +4231,37 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
             if not stop_loss_price and current_price:
                 stop_loss_price = round(current_price * 0.97, 2)
             reasoning = (raw.get("technical_analysis") or {}).get("explanation") or raw.get("explanation") or "Full ML analysis complete."
+
+            # --- OVERRIDE with professional signal file if available ---
+            # This file is written by execute_trading_decisions / _write_trade_signal
+            # and represents the EXACT professional BUY/SELL/HOLD decision from the terminal
+            try:
+                _signal_path = os.path.join(
+                    os.path.dirname(__file__), "stock_analysis",
+                    f"{sanitized_sym}_signal.json"
+                )
+                if os.path.exists(_signal_path) and (time.time() - os.path.getmtime(_signal_path) < 3700):
+                    with open(_signal_path, "r", encoding="utf-8") as _sf:
+                        _sig = json.load(_sf)
+                    _action = (_sig.get("action") or "HOLD").upper()
+                    if _action in ("BUY", "SELL", "HOLD"):
+                        recommendation = _action
+                    _sig_conf = float(_sig.get("confidence_score") or confidence)
+                    if 0.0 <= _sig_conf <= 1.0:
+                        confidence = _sig_conf
+                    _sig_reasoning = _sig.get("reasoning") or ""
+                    if _sig_reasoning:
+                        reasoning = f"[Professional Signal] {_sig_reasoning}"
+                    if _sig.get("stop_loss") and float(_sig["stop_loss"]) > 0:
+                        stop_loss_price = round(float(_sig["stop_loss"]), 2)
+                    if _sig.get("take_profit") and float(_sig["take_profit"]) > 0:
+                        target_price = round(float(_sig["take_profit"]), 2)
+                    _log_emit("INFO", f"✅ Professional signal loaded: {recommendation} (conf={confidence:.2f}) from {os.path.basename(_signal_path)}")
+                else:
+                    _log_emit("INFO", "No recent professional signal file found — using ML analysis recommendation")
+            except Exception as _sig_err:
+                _log_emit("WARNING", f"Could not load professional signal file: {_sig_err}")
+            # --- END OVERRIDE ---
             sentiment_data = raw.get("sentiment_analysis") or {}
             if isinstance(sentiment_data, dict):
                 sentiment_score = float(sentiment_data.get("score", sentiment_data.get("compound", 0)))
