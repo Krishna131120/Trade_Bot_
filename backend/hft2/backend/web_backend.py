@@ -631,6 +631,13 @@ def get_bot_running() -> bool:
     return bot_running
 
 
+@app.get("/api/health")
+async def health_check():
+    """Instant health check — zero I/O, zero blocking. Always returns immediately.
+    The frontend's BackendStatusContext polls this to detect if the process is alive."""
+    return {"status": "ok", "bot_running": bot_running, "ts": time.time()}
+
+
 @app.get("/api/bot/status")
 async def get_bot_status():
     """Return current bot status for frontend polling."""
@@ -1776,7 +1783,7 @@ class WebTradingBot:
             # Use existing stock analyzer from trading bot
             if hasattr(self.trading_bot, 'stock_analyzer'):
                 analysis = self.trading_bot.stock_analyzer.analyze_stock(
-                    symbol, bot_running=True)
+                    symbol, bot_running=get_bot_running)
                 if analysis.get('success'):
                     technical_data = analysis.get('technical_analysis', {})
                     return {
@@ -1856,7 +1863,7 @@ class WebTradingBot:
         try:
             if hasattr(self.trading_bot, 'stock_analyzer'):
                 analysis = self.trading_bot.stock_analyzer.analyze_stock(
-                    symbol, bot_running=True)
+                    symbol, bot_running=get_bot_running)
                 if analysis.get('success'):
                     ml_data = analysis.get('ml_analysis', {})
                     predicted_price = ml_data.get('predicted_price', 0)
@@ -4101,16 +4108,24 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                 start_time = time.time()
                 found_raw = None
                 
-                while get_bot_running() and (time.time() - start_time) < 600:
+                # Poll indefinitely until a result file appears OR the user clicks
+                # Stop Bot (which cancels this task via request disconnect).
+                # No hard timeout — the heavy ML pipeline can take many minutes.
+                import glob as _glob2
+                while True:
                     await asyncio.sleep(2)
-                    
-                    # Check for recent file
-                    import glob
-                    files = glob.glob(pattern)
+
+                    # Respect "Stop Bot": if bot_running was explicitly cleared, exit
+                    if not get_bot_running():
+                        _log_emit("INFO", "Bot stopped — analysis loop exiting")
+                        _emit({"type": "error", "message": "Bot was stopped"})
+                        return
+
+                    # Check for newly written file (within last 60 minutes)
+                    files = _glob2.glob(pattern)
                     if files:
                         latest_file = max(files, key=os.path.getmtime)
-                        # Ensure it's a recently generated file (last 15 minutes) to avoid stale data
-                        if time.time() - os.path.getmtime(latest_file) < 900:
+                        if time.time() - os.path.getmtime(latest_file) < 3600:
                             try:
                                 with open(latest_file, 'r', encoding='utf-8') as f:
                                     found_raw = json.load(f)
@@ -4120,13 +4135,7 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
                                 _log_emit("WARNING", f"Found analysis file but failed to read: {e}")
                 
                 raw = found_raw
-                if not raw and get_bot_running():
-                    raise asyncio.TimeoutError()
                     
-            except asyncio.TimeoutError:
-                _log_emit("ERROR", "Analysis timed out (10 min)")
-                _emit({"type": "error", "message": "Analysis timed out"})
-                return
             except asyncio.CancelledError:
                 _log_emit("INFO", "Analysis cancelled (Stop Bot)")
                 _emit({"type": "error", "message": "User interrupted the process"})
@@ -4277,6 +4286,289 @@ async def analyze_stream(request: Request, symbol: str = "INFY.NS"):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ─── REST endpoint: read analysis result from stock_analysis/ folder ──────────
+# All I/O runs in a thread executor so this endpoint NEVER blocks the event loop,
+# even when the ML pipeline is consuming 100% CPU in a background thread.
+
+def _read_analysis_file_sync(sym: str) -> dict:
+    """Synchronous worker: find + read latest JSON for *sym*. Runs in a threadpool."""
+    import glob as _glob
+    sanitized_sym = sym.replace(".", "_")
+    base_dir = os.path.dirname(__file__)
+    pattern = os.path.join(base_dir, "stock_analysis", f"{sanitized_sym}_analysis_*.json")
+    files = _glob.glob(pattern)
+    if not files:
+        return {"status": "pending", "symbol": sym}
+
+    latest_file = max(files, key=os.path.getmtime)
+    # Accept files written within last 4 hours
+    if time.time() - os.path.getmtime(latest_file) > 14400:
+        return {"status": "pending", "symbol": sym, "note": "Most recent file is too old (>4 h)"}
+
+    try:
+        with open(latest_file, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except Exception as e:
+        return {"status": "pending", "symbol": sym, "note": str(e)}
+
+    if not raw or not raw.get("success"):
+        msg = raw.get("message", "Analysis failed") if isinstance(raw, dict) else "Analysis failed"
+        return {"status": "error", "symbol": sym, "message": msg}
+
+    # --- Map the raw JSON to a frontend-friendly structure ---
+    stock_data = raw.get("stock_data") or {}
+    tech = raw.get("technical_indicators") or {}
+    ml = raw.get("ml_analysis") or {}
+
+    # Recommendation — check primary field, then RL recommendation
+    rec_primary = (raw.get("recommendation") or "").upper()
+    rec_rl = (ml.get("rl_recommendation") or "").upper()
+    rec_raw = rec_primary or rec_rl or "HOLD"
+    if "BUY" in rec_raw and "SELL" not in rec_raw:
+        recommendation = "BUY"
+    elif "SELL" in rec_raw and "BUY" not in rec_raw:
+        recommendation = "SELL"
+    else:
+        recommendation = "HOLD"
+
+    # Confidence: ml.confidence is R² (can be negative). Clamp to [0,1].
+    raw_conf = float(ml.get("confidence") or ml.get("model_accuracy") or 0.0)
+    if raw_conf < 0:
+        confidence = max(0.1, min(0.5, abs(raw_conf) / 10.0))  # negative R² → low confidence
+    elif raw_conf > 1.0:
+        confidence = min(1.0, raw_conf / 100.0)
+    else:
+        confidence = raw_conf if raw_conf > 0 else 0.5
+
+    cp_raw = stock_data.get("current_price")
+    if isinstance(cp_raw, dict):
+        current_price = float(cp_raw.get("INR") or cp_raw.get("USD") or 0)
+    else:
+        current_price = float(cp_raw or 0)
+
+    support = float(raw.get("support_level") or stock_data.get("support_level") or 0)
+    resistance = float(raw.get("resistance_level") or stock_data.get("resistance_level") or 0)
+
+    target_price = None
+    stop_loss_price = None
+    if ml.get("predicted_price") and float(ml["predicted_price"]) > 0:
+        target_price = round(float(ml["predicted_price"]), 2)
+    elif resistance > 0:
+        target_price = round(resistance, 2)
+    if support > 0:
+        stop_loss_price = round(support, 2)
+    elif current_price > 0:
+        stop_loss_price = round(current_price * 0.97, 2)
+
+    # Reasoning: top-level explanation field
+    reasoning = raw.get("explanation") or (raw.get("technical_analysis") or {}).get("explanation") or "Full ML analysis complete."
+
+    # Sentiment: nested comprehensive_analysis → confidence_score + sentiment_strength
+    sentiment_data = raw.get("sentiment_analysis") or {}
+    if isinstance(sentiment_data, dict):
+        comprehensive = sentiment_data.get("comprehensive_analysis") or {}
+        strength = comprehensive.get("sentiment_strength") or {}
+        bullish = float(strength.get("bullish", 0))
+        bearish = float(strength.get("bearish", 0))
+        neutral_s = float(strength.get("neutral", 0))
+        sentiment_score = float(comprehensive.get("confidence_score", 0.5))
+        if bullish > bearish and bullish > neutral_s:
+            sentiment_label = "bullish"
+        elif bearish > bullish and bearish > neutral_s:
+            sentiment_label = "bearish"
+        else:
+            sentiment_label = "neutral"
+    else:
+        sentiment_score = 0.5
+        sentiment_label = "neutral"
+
+    indicators: dict = {}
+    if tech.get("rsi") is not None:
+        rsi_v = float(tech["rsi"])
+        indicators["RSI"] = {"value": round(rsi_v, 2), "signal": "bearish" if rsi_v > 65 else ("bullish" if rsi_v < 40 else "neutral")}
+    if tech.get("macd") is not None:
+        indicators["MACD"] = {"value": round(float(tech["macd"]), 4), "signal": "bullish" if float(tech.get("macd", 0)) > 0 else "bearish"}
+    if tech.get("sma_50") is not None and current_price:
+        indicators["SMA 50"] = {"value": round(float(tech["sma_50"]), 2), "signal": "bullish" if current_price > float(tech["sma_50"]) else "bearish"}
+    if tech.get("adx") is not None:
+        adx_v = float(tech["adx"])
+        indicators["ADX"] = {"value": round(adx_v, 2), "signal": "bullish" if adx_v > 25 else "neutral"}
+    if tech.get("stoch_k") is not None:
+        stoch = float(tech["stoch_k"])
+        indicators["Stoch %K"] = {"value": round(stoch, 2), "signal": "overbought" if stoch > 80 else ("oversold" if stoch < 20 else "neutral")}
+    if tech.get("volatility") is not None:
+        vol = float(tech["volatility"])
+        indicators["Volatility"] = {"value": round(vol * 100, 2), "signal": "high" if vol > 0.03 else ("low" if vol < 0.01 else "normal")}
+
+    if tech.get("bb_upper") is not None and tech.get("bb_lower") is not None:
+        indicators["Bollinger"] = {
+            "value": round((float(tech["bb_upper"]) + float(tech["bb_lower"])) / 2, 2),
+            "signal": "bullish" if current_price < float(tech["bb_lower"]) else ("bearish" if current_price > float(tech["bb_upper"]) else "neutral")
+        }
+
+    all_models = ml.get("all_model_scores") or {}
+    model_predictions = [
+        {"model": k, "r2": round(float(v.get("r2", 0)), 4), "prediction": round(float(v.get("prediction", 0)), 2)}
+        for k, v in all_models.items() if isinstance(v, dict)
+    ] if all_models else []
+
+    result_payload = {
+        "symbol": sym,
+        "recommendation": recommendation,
+        "confidence": round(min(1.0, max(0.0, confidence)), 3),
+        "reasoning": str(reasoning)[:800] if reasoning else "Full ML analysis complete.",
+        "risk_score": 0.5,
+        "target_price": target_price,
+        "current_price": current_price,
+        "stop_loss": stop_loss_price,
+        "sentiment": sentiment_label,
+        "sentiment_score": sentiment_score,
+        "indicators": indicators,
+        "model_predictions": model_predictions,
+        "best_model": str(ml.get("best_ml_model", "")),
+        "timestamp": raw.get("timestamp", datetime.now().isoformat()),
+        "file": os.path.basename(latest_file),
+    }
+    return {"status": "ready", "symbol": sym, "data": result_payload}
+
+
+@app.get("/api/analysis-result")
+async def get_analysis_result(symbol: str = "INFY.NS"):
+    """
+    Lightweight polling endpoint. All disk I/O offloaded to a thread executor
+    so this endpoint NEVER blocks the asyncio event loop during ML analysis.
+    """
+    try:
+        sym = symbol.strip().upper()
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _read_analysis_file_sync, sym)
+        return result
+    except Exception as e:
+        logger.error(f"Error in analysis-result for {symbol}: {e}")
+        return {"status": "error", "symbol": symbol, "message": str(e)}
+
+
+# ─── Auto-execute trade from analysis signal ───────────────────────────────────
+
+class ExecuteSignalRequest(BaseModel):
+    symbol: str
+    username: str  # used to look up per-user Dhan credentials from MongoDB
+    force: bool = False  # if True, execute even if not live mode (for testing)
+
+
+def _execute_signal_sync(symbol: str, username: str, force: bool = False) -> dict:
+    """
+    Synchronous worker (runs in thread pool) that:
+      1. Reads the analysis JSON for *symbol*
+      2. Looks up user Dhan credentials from MongoDB
+      3. Calls LiveTradingExecutor.execute_buy_order if recommendation is BUY
+      4. Returns a result dict
+
+    Designed to run outside the asyncio event loop via run_in_executor.
+    """
+    try:
+        from auth import get_user_demat, get_user_by_username
+        from live_executor import LiveTradingExecutor
+        from portfolio_manager import DualPortfolioManager
+    except ImportError:
+        try:
+            from .auth import get_user_demat, get_user_by_username
+            from .live_executor import LiveTradingExecutor
+            from .portfolio_manager import DualPortfolioManager
+        except ImportError as e:
+            return {"success": False, "message": f"Import error: {e}"}
+
+    # 1. Read latest analysis from disk
+    analysis = _read_analysis_file_sync(symbol)
+    if analysis.get("status") != "ready":
+        return {"success": False, "message": f"No analysis ready for {symbol}: {analysis.get('status')}"}
+
+    data = analysis.get("data", {})
+    recommendation = data.get("recommendation", "HOLD")
+
+    if recommendation not in ("BUY",) and not force:
+        return {
+            "success": False,
+            "message": f"Signal is {recommendation}, not BUY — no trade placed",
+            "recommendation": recommendation
+        }
+
+    # 2. Fetch user Dhan credentials from MongoDB
+    demat = get_user_demat(username)
+    if not demat:
+        return {"success": False, "message": f"No Dhan credentials found for user '{username}' in MongoDB"}
+
+    dhan_client_id = demat.get("client_id")
+    dhan_access_token = demat.get("access_token")
+
+    if not dhan_client_id or not dhan_access_token:
+        return {"success": False, "message": "Dhan credentials incomplete (missing client_id or access_token)"}
+
+    # 3. Instantiate executor with user's credentials
+    try:
+        pm = DualPortfolioManager(initial_capital=1_000_000, mode="live")
+        config = {
+            "dhan_client_id": dhan_client_id,
+            "dhan_access_token": dhan_access_token,
+            "enable_buy": True,
+            "enable_sell": True,
+            "stop_loss_pct": 0.05,
+            "max_capital_per_trade": 0.10,  # max 10% of portfolio per trade
+            "max_trade_limit": 50,
+        }
+        executor = LiveTradingExecutor(portfolio_manager=pm, config=config)
+    except Exception as e:
+        return {"success": False, "message": f"Failed to initialize executor: {e}"}
+
+    # 4. Build signal data from analysis result
+    current_price = data.get("current_price", 0.0)
+    stop_loss = data.get("stop_loss") or (current_price * 0.95 if current_price else None)
+    target_price = data.get("target_price")
+    confidence = data.get("confidence", 0.5)
+
+    signal_data = {
+        "symbol": symbol,
+        "recommendation": recommendation,
+        "current_price": current_price,
+        "stop_loss": stop_loss,
+        "take_profit": target_price,
+        "confidence": confidence,
+        "quantity": 1,  # start with 1 share; executor may adjust based on funds
+    }
+
+    # 5. Execute
+    result = executor.execute_buy_order(symbol=symbol, signal_data=signal_data)
+    result["symbol"] = symbol
+    result["recommendation"] = recommendation
+    result["current_price"] = current_price
+    result["stop_loss"] = stop_loss
+    result["target_price"] = target_price
+    return result
+
+
+@app.post("/api/execute-signal")
+async def execute_signal(req: ExecuteSignalRequest):
+    """
+    Auto-execute a trade for the given symbol based on the latest analysis result.
+
+    Called by the frontend HftAnalysisPanel when:
+      - Bot is in LIVE mode
+      - Latest analysis recommendation is BUY
+      - User has confirmed they want auto-execution
+
+    Returns order confirmation or reason for not trading.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, _execute_signal_sync, req.symbol, req.username, req.force
+        )
+        return result
+    except Exception as e:
+        logger.error(f"execute-signal error for {req.symbol}: {e}")
+        return {"success": False, "message": str(e)}
 
 
 @app.get("/api/stream")
@@ -5902,6 +6194,25 @@ async def get_live_trading_status(user_demat: tuple = Depends(get_optional_user_
 
         payload, demat = user_demat if isinstance(user_demat, tuple) else (None, None)
         user_has_demat = bool(demat and demat.get("access_token") and demat.get("client_id"))
+
+        # ── Fast path: bot not in live mode ─────────────────────────────────────
+        # When the ML analysis pipeline is running (heavy background task), any
+        # outbound Dhan/Fyers HTTP calls from this endpoint block for 9-15s,
+        # causing frontend 10s timeout → "System Offline".  Return immediately
+        # when there is nothing live to actually check.
+        if not (trading_bot and trading_bot.config.get("mode") == "live"):
+            return {
+                "available": True,
+                "live_trading_active": False,
+                "trading_mode": "paper",
+                "dhan_configured": user_has_demat,
+                "dhan_connected": False,
+                "dhan_error": None,
+                "market_status": "UNKNOWN",
+                "account_info": {},
+                "bot_running": bot_running,
+                "bot_status": "RUNNING" if bot_running else "STOPPED",
+            }
 
         if trading_bot and trading_bot.config.get("mode") == "live":
             # Check Dhan connection (run in executor with timeout to avoid blocking)

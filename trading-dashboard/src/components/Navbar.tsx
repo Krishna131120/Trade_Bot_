@@ -2,7 +2,6 @@ import { Bell, User, Sun, Moon, Sparkles, Menu } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import ServerStatusIndicator from './ServerStatusIndicator';
 import NotificationCenter from './NotificationCenter';
 
 
@@ -63,8 +62,6 @@ const Navbar = ({ activeTab, onTabChange, onMenuClick, showAssetTabs = false }: 
 
         {/* Right side controls - Responsive */}
         <div className="flex items-center gap-0.5 sm:gap-1.5 md:gap-2 flex-shrink-0">
-          {/* Server Status Indicator - Hidden on very small screens */}
-          <ServerStatusIndicator className="hidden lg:block" />
 
           {/* Tab Switcher - Responsive with tooltips - Only show when showAssetTabs is true */}
           {showAssetTabs && (

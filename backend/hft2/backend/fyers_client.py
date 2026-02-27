@@ -123,7 +123,11 @@ class FyersAPIClient:
         """Make API request with comprehensive error handling"""
         self._rate_limit()
         
-        url = f"{self.base_url}/{endpoint}"
+        if endpoint.startswith("data/"):
+            url = f"https://api-t1.fyers.in/{endpoint}"
+        else:
+            url = f"{self.base_url}/{endpoint}"
+            
         start_time = time.time()
         
         try:

@@ -15,18 +15,18 @@ const BackendStatusContext = createContext<BackendStatusContextType | undefined>
 
 export const BackendStatusProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<BackendStatusState>({
-    isOnline: true,   // optimistic: assume online until first check fails
+    isOnline: true,   // optimistic: assume online until a hard connection failure
     isOffline: false,
     status: 'CHECKING'
   });
 
   const checkStatus = async () => {
-    setState(prev => ({ ...prev, status: 'CHECKING' }));
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s so long analysis doesn't mark backend offline
+    // 5-second ping. If it doesn't respond in 5s the backend is busy with ML analysis.
+    // We do NOT mark it OFFLINE for a timeout — only for a true connection refusal.
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
-      // Web backend (5000) exposes /api/health; api_server (8000) has /tools/health
       const response = await fetch(`${config.API_BASE_URL}/api/health`, { signal: controller.signal });
       clearTimeout(timeoutId);
       const isOnline = response.ok;
@@ -37,25 +37,28 @@ export const BackendStatusProvider: React.FC<{ children: React.ReactNode }> = ({
       });
     } catch (e: any) {
       clearTimeout(timeoutId);
-      // Timeout/abort = backend likely busy (e.g. long prediction), don't mark offline
-      const isTimeout = e?.name === 'AbortError';
-      setState({
-        isOnline: isTimeout,
-        isOffline: !isTimeout,
-        status: isTimeout ? 'CHECKING' : 'OFFLINE'
-      });
+      const isAbort = e?.name === 'AbortError';
+      const isNetworkRefused =
+        !isAbort &&
+        (e?.message?.includes('ERR_CONNECTION_REFUSED') ||
+          e?.message?.includes('ECONNREFUSED'));
+
+      if (isAbort || !isNetworkRefused) {
+        // Timeout or ambiguous error → backend is BUSY (ML analysis, cold start…)
+        // Keep as online/checking — DO NOT flash "System Offline"
+        setState(prev => ({ ...prev, status: 'CHECKING' }));
+      } else {
+        // True connection refused = process is not running
+        setState({ isOnline: false, isOffline: true, status: 'OFFLINE' });
+      }
     }
   };
 
   useEffect(() => {
     checkStatus();
-    // Retry after 5s and 15s on load (backend may be waking up on Render)
-    const t1 = setTimeout(checkStatus, 5000);
-    const t2 = setTimeout(checkStatus, 15000);
-    const interval = setInterval(checkStatus, 30000);
+    // Poll every 60 s — false positives during ML analysis are very disruptive.
+    const interval = setInterval(checkStatus, 60000);
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
       clearInterval(interval);
     };
   }, []);

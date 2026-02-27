@@ -395,6 +395,46 @@ export const hftApiService = {
             throw error;
         }
     },
+
+    // ===== Analysis Result (polls stock_analysis/ folder on backend) =====
+    async getAnalysisResult(symbol: string): Promise<{
+        status: 'pending' | 'ready' | 'error';
+        symbol?: string;
+        data?: any;
+        message?: string;
+    }> {
+        try {
+            const response = await api.get(`/analysis-result?symbol=${encodeURIComponent(symbol)}`, {
+                // 30-second timeout — backend is busy during ML analysis.
+                // The endpoint is non-blocking (run_in_executor) so it will
+                // respond quickly once the thread pool picks it up.
+                timeout: 30000,
+            });
+            return response.data;
+        } catch (error) {
+            console.error('Error getting analysis result:', error);
+            return { status: 'error', message: 'Request failed' };
+        }
+    },
+
+    // ===== Auto-Execute Signal =====
+    async executeSignal(symbol: string, username: string, force: boolean = false): Promise<{
+        success: boolean;
+        message?: string;
+        order_id?: string;
+        recommendation?: string;
+    }> {
+        try {
+            const response = await api.post('/execute-signal', { symbol, username, force });
+            return response.data;
+        } catch (error: any) {
+            console.error(`Error executing signal for ${symbol}:`, error);
+            return {
+                success: false,
+                message: error.response?.data?.message || error.message || 'Execution failed'
+            };
+        }
+    },
 };
 
 // ===== SSE Stream =====

@@ -46,18 +46,19 @@ export default function HftPage() {
     const [botRunKey, setBotRunKey] = useState(0);
     const [globalBotStatus, setGlobalBotStatus] = useState<'IDLE' | 'INITIALIZING' | 'READY' | 'ERROR' | 'STOPPED'>('IDLE');
 
-    // Poll for bot status separately
+    // Poll for bot status separately — only every 30 s while analysis is running
+    // so we don't flood the busy event loop with 120 s-timeout requests.
     useEffect(() => {
         const checkStatus = async () => {
             try {
                 const res = await hftApiService.getBotStatus();
                 setGlobalBotStatus(res.status);
             } catch (e) {
-                // Silent catch for polling
+                // Silent catch — status is non-critical
             }
         };
         checkStatus();
-        const interval = setInterval(checkStatus, 3000);
+        const interval = setInterval(checkStatus, 30000); // 30 s
         return () => clearInterval(interval);
     }, []);
 
@@ -168,26 +169,16 @@ export default function HftPage() {
                 await loadLiveStatus();
             }
         } catch (error: any) {
-            // A timeout means the backend is slow/busy, NOT offline — keep previous data visible
+            // A timeout means the backend is slow/busy with ML analysis — NOT offline.
+            // Only mark offline for true network connection failures.
             const isTimeout = error?.message?.includes('timeout') || error?.code === 'ECONNABORTED';
             const isNetworkError = error?.message === 'Network Error' || error?.code === 'ERR_NETWORK';
-            if (isNetworkError) {
-                // Only mark offline for true connection failures
+            if (isNetworkError && !botData.isRunning) {
+                // Only mark offline for true connection failures AND only when bot is NOT running
+                // (during ML analysis, even network stack can hiccup — don't show System Offline)
                 setConnected(false);
             }
-            // For timeouts or other transient errors, silently keep last known state
-            if (!isTimeout && !isNetworkError) {
-                console.warn('Non-timeout bot data error, trying settings fallback:', error?.message);
-                setConnected(false);
-                try {
-                    const settings = await hftApiService.getSettings();
-                    const savedMode = settings?.mode || 'paper';
-                    setBotData(prev => ({
-                        ...prev,
-                        config: { ...prev.config, mode: savedMode }
-                    }));
-                } catch { /* keep last state */ }
-            }
+            // Silently keep last known state for timeouts or when bot is running
         }
     };
 

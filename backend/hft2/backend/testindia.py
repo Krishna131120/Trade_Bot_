@@ -2751,7 +2751,7 @@ class Stock:
             benchmark_tickers=self.config.get("benchmark_tickers", ["^NSEI"]),
             prediction_days=self.config.get("prediction_days", 30),
             training_period=self.config.get("period", "1y"),
-            bot_running=self.bot_running
+            bot_running=lambda: self.bot_running
         )
 
         # Validate ML models if ML interface is available
@@ -9070,7 +9070,7 @@ class StockTradingBot:
             benchmark_tickers=self.config.get("benchmark_tickers", ["^NSEI"]),
             prediction_days=self.config.get("prediction_days", 30),
             training_period=self.config.get("period", "1y"),
-            bot_running=self.bot_running
+            bot_running=lambda: self.bot_running
         )
 
         # Validate ML models if ML interface is available
