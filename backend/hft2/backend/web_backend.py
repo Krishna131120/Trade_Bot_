@@ -893,11 +893,11 @@ async def trigger_all_hft2_components_for_symbol(symbol: str):
             
             # 1. Fetch live data from Fyers data service (if available)
             try:
-                from fyers_client import get_fyers_client
-                fyers = get_fyers_client()
+                from data_service_client import get_data_client
+                fyers = get_data_client()
                 if fyers:
                     try:
-                        # Get current price from Fyers
+                        # Get current price from Fyers data service
                         loop = asyncio.get_event_loop()
                         current_price = await loop.run_in_executor(None, fyers.get_price, symbol)
                         if current_price:

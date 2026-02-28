@@ -659,28 +659,8 @@ Positions: Active Positions: {len(self.trading_bot.portfolio.holdings)}
 
 
 def get_fyers_client():
-    """Get Fyers client for real-time data - same as web_backend"""
-    try:
-        import os
-        from dotenv import load_dotenv
-        load_dotenv()
-
-        app_id = os.getenv("FYERS_APP_ID")
-        access_token = os.getenv("FYERS_ACCESS_TOKEN")
-
-        if not app_id or not access_token or not FYERS_AVAILABLE:
-            return None
-
-        fyers = fyersModel.FyersModel(
-            client_id=app_id,
-            is_async=False,
-            token=access_token,
-            log_path=""
-        )
-        return fyers
-    except Exception as e:
-        logger.warning(f"Fyers client creation failed: {e}")
-        return None
+    """DEPRECATED: We now use the Fyers Data Service API running on port 8009 directly."""
+    return True
 
 
 def fyers_to_yfinance_format(fyers_data, ticker):
@@ -723,37 +703,32 @@ def get_stock_data_fyers_or_yf(ticker, period="1d"):
         # If no exchange suffix and not a numeric security ID or index, assume NSE
         ticker = ticker + '.NS'
 
-    # Try Fyers first
-    fyers_client = get_fyers_client()
-    if fyers_client:
-        try:
-            # Convert ticker format for Fyers - handle both NSE and BSE
-            if ticker.endswith('.NS'):
-                fyers_symbol = f"NSE:{ticker.replace('.NS', '')}-EQ"
-            elif ticker.endswith('.BO'):
-                fyers_symbol = f"BSE:{ticker.replace('.BO', '')}-EQ"
-            else:
-                # Default to NSE if no exchange specified
-                fyers_symbol = f"NSE:{ticker}-EQ"
-
-            if period == "1d":
-                # For current day data, use quotes
-                quotes = fyers_client.quotes({"symbols": fyers_symbol})
-                if quotes and quotes.get("s") == "ok":
-                    df = fyers_to_yfinance_format(quotes, ticker)
-                    if df is not None and not df.empty:
-                        logger.debug(f"Using Fyers current data for {ticker}")
-                        return df
-            else:
-                # For historical data, use Fyers historical API
-                df = get_fyers_historical_data(
-                    fyers_client, fyers_symbol, ticker, period)
-                if df is not None and not df.empty:
-                    logger.debug(
-                        f"Using Fyers historical data for {ticker} ({period})")
+    # Try Fyers Data Service first
+    try:
+        import requests
+        import pandas as pd
+        from datetime import datetime
+        
+        if period == "1d":
+            # For current day data
+            response = requests.get(f"http://127.0.0.1:8009/data/{ticker}", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data and "price" in data:
+                    df = pd.DataFrame({
+                        'Open': [data.get('open', data['price'])],
+                        'High': [data.get('high', data['price'])],
+                        'Low': [data.get('low', data['price'])],
+                        'Close': [data['price']],
+                        'Volume': [data.get('volume', 0)]
+                    }, index=[datetime.now()])
+                    logger.debug(f"Using Fyers Data Service current data for {ticker}")
                     return df
-        except Exception as e:
-            logger.warning(f"Fyers failed for {ticker}: {e}")
+        else:
+            # Historical data is disabled in data service, fallback early.
+            pass
+    except Exception as e:
+        logger.warning(f"Fyers Data Service failed for {ticker}: {e}")
 
     # Fallback to yfinance - EXACT SAME LOGIC
     try:
@@ -5486,13 +5461,13 @@ class Stock:
                             try:
                                 logger.info("Training XGBoost model...")
                                 xgb_model = ml_libraries_available['xgb'].XGBRegressor(
-                                    n_estimators=200,
-                                    max_depth=6,
+                                    n_estimators=50,
+                                    max_depth=3,
                                     learning_rate=0.1,
                                     subsample=0.8,
                                     colsample_bytree=0.8,
                                     random_state=42,
-                                    n_jobs=-1
+                                    n_jobs=1
                                 )
                                 xgb_model.fit(X_train_robust, y_train)
                                 models['xgb'] = xgb_model
@@ -5510,13 +5485,14 @@ class Stock:
                             try:
                                 logger.info("Training LightGBM model...")
                                 lgb_model = ml_libraries_available['lgb'].LGBMRegressor(
-                                    n_estimators=200,
-                                    max_depth=6,
+                                    n_estimators=50,
+                                    max_depth=3,
+                                    num_leaves=15,
                                     learning_rate=0.1,
                                     subsample=0.8,
                                     colsample_bytree=0.8,
                                     random_state=42,
-                                    n_jobs=-1,
+                                    n_jobs=1,
                                     verbose=-1
                                 )
                                 lgb_model.fit(X_train_robust, y_train)
@@ -5535,11 +5511,12 @@ class Stock:
                             try:
                                 logger.info("Training CatBoost model...")
                                 cb_model = ml_libraries_available['cb'].CatBoostRegressor(
-                                    iterations=200,
-                                    depth=6,
+                                    iterations=50,
+                                    depth=3,
                                     learning_rate=0.1,
                                     random_state=42,
-                                    verbose=False
+                                    verbose=False,
+                                    thread_count=1
                                 )
                                 cb_model.fit(X_train_robust, y_train)
                                 models['cb'] = cb_model
@@ -5557,10 +5534,10 @@ class Stock:
                             try:
                                 logger.info("Training Extra Trees model...")
                                 et_model = ExtraTreesRegressor(
-                                    n_estimators=200,
-                                    max_depth=10,
+                                    n_estimators=50,
+                                    max_depth=5,
                                     random_state=42,
-                                    n_jobs=-1
+                                    n_jobs=1
                                 )
                                 et_model.fit(X_train_robust, y_train)
                                 models['et'] = et_model

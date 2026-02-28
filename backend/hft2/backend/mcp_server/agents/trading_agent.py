@@ -563,7 +563,8 @@ class TradingAgent:
             ml_direction = ensemble_predictions.get("ensemble_direction", 0)
             
             # Adjust risk score based on ML confidence and agreement with AI decision
-            ai_recommendation = ai_decision.metadata.get("recommendation", "HOLD")
+            ai_metadata = ai_decision.metadata if ai_decision and ai_decision.metadata else {}
+            ai_recommendation = ai_metadata.get("recommendation", "HOLD")
             ai_direction = 1 if ai_recommendation == "BUY" else (-1 if ai_recommendation == "SELL" else 0)
             
             # If ML and AI agree, reduce risk score; if they disagree, increase it
@@ -571,11 +572,13 @@ class TradingAgent:
             
             adjusted_risk_score = risk_score * agreement_factor
             
+            risk_metadata = risk_response.metadata if risk_response and risk_response.metadata else {}
+            
             return {
-                "ai_risk_assessment": risk_response.content,
+                "ai_risk_assessment": risk_response.content if risk_response else "No AI risk assessment completed",
                 "risk_score": adjusted_risk_score,
                 "original_risk_score": risk_score,
-                "risk_factors": risk_response.metadata.get("risk_factors", []),
+                "risk_factors": risk_metadata.get("risk_factors", []),
                 "volatility": volatility,
                 "liquidity_risk": self._assess_liquidity_risk(context.market_data),
                 "correlation_risk": await self._assess_correlation_risk(context.symbol),
@@ -673,7 +676,8 @@ class TradingAgent:
         """Synthesize final trading signal from all analysis"""
         try:
             # Extract decision from AI response
-            recommendation = ai_decision.metadata.get("recommendation", "HOLD")
+            ai_metadata = ai_decision.metadata if ai_decision and ai_decision.metadata else {}
+            recommendation = ai_metadata.get("recommendation", "HOLD")
             decision = TradingDecision(recommendation) if recommendation in [d.value for d in TradingDecision] else TradingDecision.HOLD
             
             # Calculate target and stop loss
@@ -712,7 +716,7 @@ class TradingAgent:
                 target_price=target_price,
                 stop_loss=stop_loss,
                 position_size=position_size,
-                reasoning=ai_decision.reasoning or "AI-generated decision",
+                reasoning=ai_decision.reasoning if ai_decision and getattr(ai_decision, 'reasoning', None) else "AI-generated decision",
                 risk_score=risk_assessment.get("risk_score", 5.0),
                 expected_return=expected_return,
                 time_horizon="1-5 days",  # Default time horizon
