@@ -181,17 +181,37 @@ class FyersAPIClient:
         result = await self._make_request("GET", "data/quotes", data)
         quotes = {}
         
-        for symbol, quote_data in result.get("d", {}).items():
-            quotes[symbol] = MarketData(
-                symbol=symbol,
-                ltp=float(quote_data.get("v", {}).get("lp", 0)),
-                open_price=float(quote_data.get("v", {}).get("o", 0)),
-                high_price=float(quote_data.get("v", {}).get("h", 0)),
-                low_price=float(quote_data.get("v", {}).get("l", 0)),
-                close_price=float(quote_data.get("v", {}).get("prev_close_price", 0)),
-                volume=int(quote_data.get("v", {}).get("volume", 0)),
-                timestamp=datetime.now()
-            )
+        data_block = result.get("d", [])
+        
+        # Handle new API v3 format (list of dicts)
+        if isinstance(data_block, list):
+            for quote_data in data_block:
+                symbol = quote_data.get("n", "")
+                if not symbol:
+                    continue
+                quotes[symbol] = MarketData(
+                    symbol=symbol,
+                    ltp=float(quote_data.get("v", {}).get("lp", 0)),
+                    open_price=float(quote_data.get("v", {}).get("o", 0)),
+                    high_price=float(quote_data.get("v", {}).get("h", 0)),
+                    low_price=float(quote_data.get("v", {}).get("l", 0)),
+                    close_price=float(quote_data.get("v", {}).get("prev_close_price", 0)),
+                    volume=int(quote_data.get("v", {}).get("volume", 0)),
+                    timestamp=datetime.now()
+                )
+        # Handle fallback format (dict of dicts)
+        elif isinstance(data_block, dict):
+            for symbol, quote_data in data_block.items():
+                quotes[symbol] = MarketData(
+                    symbol=symbol,
+                    ltp=float(quote_data.get("v", {}).get("lp", 0)),
+                    open_price=float(quote_data.get("v", {}).get("o", 0)),
+                    high_price=float(quote_data.get("v", {}).get("h", 0)),
+                    low_price=float(quote_data.get("v", {}).get("l", 0)),
+                    close_price=float(quote_data.get("v", {}).get("prev_close_price", 0)),
+                    volume=int(quote_data.get("v", {}).get("volume", 0)),
+                    timestamp=datetime.now()
+                )
         
         return quotes
     
