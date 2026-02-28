@@ -1,14 +1,5 @@
 # ============================================================
-# Render Cloud Requirements — Union of all 3 requirements files
-# backend/requirements-unified.txt
-# backend/requirements-optional.txt  (LangChain excluded — too heavy)
-# backend/hft2/backend/requirements-minimal.txt
-#
-# Heavy packages excluded (cause Render build OOM / compile errors):
-#   torch, catboost, selenium, lightgbm, langchain stack
-#   fyers-apiv3 (needs C++ build tools, not on Render)
-#
-# To add them back locally: install requirements-unified.txt + requirements-optional.txt
+# Render Cloud Requirements — Full ML stack
 # ============================================================
 
 # FastAPI & server
@@ -26,7 +17,7 @@ dhanhq>=1.3.0
 pandas-market-calendars>=4.3.0
 tqdm>=4.65.0
 
-# Technical analysis (lightweight, no C++ needed)
+# Technical analysis
 ta>=0.10.2
 
 # Auth & DB — CRITICAL for login/signup/MongoDB
@@ -39,10 +30,13 @@ python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
 
-# ML (lightweight — no torch/catboost/lightgbm)
+# ML — full stack (all have Linux pre-built wheels, no C++ compile needed)
 scikit-learn>=1.3.0
 scipy>=1.11.0
 xgboost>=1.7.0
+lightgbm>=4.0.0
+catboost>=1.2.0
+torch>=2.0.0
 gymnasium
 
 # Utilities
