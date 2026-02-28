@@ -1,39 +1,56 @@
 services:
-  # 1. HFT Backend (Core Logic, Auth, MongoDB)
+  # ============================================================
+  # Single Backend Service — runs BOTH backends
+  # rootDir: backend/
+  #   - web_backend.py  (HFT: auth, bot, broker)  → $PORT
+  #   - api_server.py   (ML predictions, proxy)    → $PORT+1
+  #
+  # Set these env vars in Render Dashboard (NOT in this file):
+  #   MONGODB_URI  — your Atlas connection string
+  #   JWT_SECRET   — long random hex string
+  # ============================================================
   - type: web
-    name: trade-bot-hft
+    name: trade-bot-backend
     runtime: python
-    buildCommand: pip install -r backend/hft2/backend/requirements-minimal.txt
-    startCommand: bash backend/hft2/backend/render_start.sh
+    rootDir: backend
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: bash render_start.sh
+    healthCheckPath: /api/health
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.13.0
-      # Add MONGODB_URI and JWT_SECRET in Render Dashboard
+      - key: MONGODB_URI
+        sync: false          # Set in Render Dashboard
+      - key: JWT_SECRET
+        sync: false          # Set in Render Dashboard
+      - key: CORS_ALLOW_ALL
+        value: "true"
+      - key: MODE
+        value: "live"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: GROQ_API_KEY
+        sync: false          # Optional — set in Render Dashboard if you use it
+      - key: GROQ_MODEL
+        value: "llama-3.1-8b-instant"
+      - key: JWT_EXPIRE_MINUTES
+        value: "1440"        # 24 hours
 
-  # 2. API Backend (ML Predictions + Gateway to HFT)
-  - type: web
-    name: trade-bot-api
-    runtime: python
-    buildCommand: pip install -r backend/requirements-unified.txt
-    startCommand: python backend/api_server.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.13.0
-      - key: HFT2_BACKEND_URL
-        fromService:
-          type: web
-          name: trade-bot-hft
-          property: url
-
-  # 3. Frontend (React Dashboard)
+  # ============================================================
+  # Frontend — React/Vite static site
+  # Auto-wires VITE_API_BASE_BACKEND_URL to the backend service URL
+  # ============================================================
   - type: static
     name: trade-bot-dashboard
-    runtime: static
     buildCommand: cd trading-dashboard && npm install && npm run build
-    publish: trading-dashboard/dist
+    staticPublishPath: trading-dashboard/dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
     envVars:
       - key: VITE_API_BASE_BACKEND_URL
         fromService:
           type: web
-          name: trade-bot-api
-          property: url
+          name: trade-bot-backend
+          property: host          # Gets the public https URL of the backend
+      - key: VITE_ENABLE_AUTH
+        value: "true"

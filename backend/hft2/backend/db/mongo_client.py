@@ -8,7 +8,8 @@ _client = None
 
 
 def _load_mongo_env():
-    """Load env from backend/hft2/env so MONGODB_URI is set regardless of cwd."""
+    """Load MONGODB_URI from environment. On Render it's set via dashboard env vars.
+    For local dev, falls back to dotenv loading from backend/hft2/env or .env file."""
     uri = os.getenv("MONGODB_URI")
     if uri:
         return uri
@@ -39,13 +40,17 @@ def get_mongo_client():
         return _client
     uri = _load_mongo_env()
     if not uri:
-        raise ValueError("MONGODB_URI not set. Add it to backend/hft2/env or set the environment variable.")
+        raise ValueError(
+            "MONGODB_URI not set.\n"
+            "  Local dev: add MONGODB_URI=<atlas-uri> to backend/hft2/env\n"
+            "  Render:    add MONGODB_URI in the service's Environment settings"
+        )
     try:
         from pymongo import MongoClient
         # 10s timeout so we don't hang; Atlas can be slow on first connect
         _client = MongoClient(uri, serverSelectionTimeoutMS=10000)
         _client.admin.command("ping")
-        logger.info("MongoDB connected")
+        logger.info("MongoDB connected successfully")
         return _client
     except Exception as e:
         logger.error(f"MongoDB connection failed: {e}")
@@ -57,5 +62,4 @@ def get_mongo_db(name: Optional[str] = None):
     client = get_mongo_client()
     if name:
         return client[name]
-    # default db from URI or 'trading'
     return client.get_database()

@@ -1,0 +1,62 @@
+# ============================================================
+# Render Cloud Requirements — Union of all 3 requirements files
+# backend/requirements-unified.txt
+# backend/requirements-optional.txt  (LangChain excluded — too heavy)
+# backend/hft2/backend/requirements-minimal.txt
+#
+# Heavy packages excluded (cause Render build OOM / compile errors):
+#   torch, catboost, selenium, lightgbm, langchain stack
+#   fyers-apiv3 (needs C++ build tools, not on Render)
+#
+# To add them back locally: install requirements-unified.txt + requirements-optional.txt
+# ============================================================
+
+# FastAPI & server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.4.0
+python-dotenv>=1.0.0
+
+# Data & APIs
+pandas>=2.1.0
+numpy>=1.26.4
+requests>=2.31.0
+yfinance>=0.2.18
+dhanhq>=1.3.0
+pandas-market-calendars>=4.3.0
+
+# Technical analysis (lightweight, no C++ needed)
+ta>=0.10.2
+
+# Auth & DB — CRITICAL for login/signup/MongoDB
+pymongo>=4.6.0
+motor>=3.3.0
+dnspython>=2.4.0
+PyJWT>=2.8.0
+bcrypt>=4.0.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
+
+# ML (lightweight — no torch/catboost/lightgbm)
+scikit-learn>=1.3.0
+scipy>=1.11.0
+xgboost>=1.7.0
+gymnasium
+
+# Utilities
+tenacity>=8.2.0
+pytz>=2023.3
+apscheduler>=3.10.0
+aiohttp>=3.8.3,<4.0.0
+websockets>=12.0
+psutil>=5.9.0
+beautifulsoup4>=4.12.0
+dataclasses-json>=0.6.0
+typing-extensions>=4.8.0
+prometheus-client>=0.19.0
+vaderSentiment>=3.3.2
+praw>=7.7.0
+gnews>=0.3.6
+SQLAlchemy>=2.0.0
+aiosqlite>=0.19.0

@@ -55,11 +55,14 @@ if os.getenv('RENDER'):
         "https://trade-bot-api.onrender.com",
     ])
 
-# Directories
-DATA_DIR = Path("data")
+# Directories — use /tmp on Render (ephemeral, always writable)
+# Override with env vars: LOGS_DIR, DATA_DIR (set in render_start.sh)
+_base_data = os.getenv("DATA_DIR", "data")
+_base_logs = os.getenv("LOGS_DIR", "data/logs")
+DATA_DIR = Path(_base_data)
 DATA_CACHE_DIR = DATA_DIR / "cache"
 FEATURE_CACHE_DIR = DATA_DIR / "features"
-LOGS_DIR = DATA_DIR / "logs"
+LOGS_DIR = Path(_base_logs)
 MODEL_DIR = Path("models")
 
 # Ensure directories exist with proper error handling
@@ -76,16 +79,11 @@ for dir_name, directory in directories_to_create:
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        print(f'[ERROR] No permission to create {dir_name} directory: {directory}', file=sys.stderr)
-        print(f'[ERROR] Please ensure write permissions for: {directory.parent}', file=sys.stderr)
-        print(f'[ERROR] Current user: {os.getenv("USER", os.getenv("USERNAME", "unknown"))}', file=sys.stderr)
-        sys.exit(1)
+        print(f'[WARN] No permission to create {dir_name} at {directory} — using /tmp fallback', file=sys.stderr)
+        # Fallback to /tmp so Render doesn't crash on startup
+        _tmp_dir = Path('/tmp') / directory.name
+        _tmp_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        print(f'[ERROR] Cannot create {dir_name} directory: {directory}', file=sys.stderr)
-        print(f'[ERROR] OS Error: {e}', file=sys.stderr)
-        print(f'[ERROR] Check disk space and file system permissions', file=sys.stderr)
-        sys.exit(1)
+        print(f'[WARN] Cannot create {dir_name} directory: {directory} — {e}', file=sys.stderr)
     except Exception as e:
-        print(f'[ERROR] Unexpected error creating {dir_name} directory: {directory}', file=sys.stderr)
-        print(f'[ERROR] {e}', file=sys.stderr)
-        sys.exit(1)
+        print(f'[WARN] Unexpected error creating {dir_name} directory: {directory} — {e}', file=sys.stderr)

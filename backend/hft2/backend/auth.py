@@ -15,9 +15,21 @@ try:
 except Exception:
     pass
 
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production-use-long-secret")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+if not JWT_SECRET:
+    import sys as _sys
+    print(
+        "[CRITICAL] JWT_SECRET environment variable is not set!\n"
+        "  Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+        "  Then add JWT_SECRET=<value> to your Render environment variables.",
+        file=_sys.stderr
+    )
+    # Use a temporary random secret so the process doesn't crash,
+    # but tokens won't survive restarts. Set JWT_SECRET in production!
+    import secrets as _secrets
+    JWT_SECRET = _secrets.token_hex(32)
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 24h default
 
 
 def _get_users_collection():

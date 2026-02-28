@@ -1,5 +1,6 @@
 # Python
 venv/
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -62,3 +63,10 @@ trading-dashboard/build/
 
 # HFT2 code is in backend/hft2/ and is tracked. Only ignore the secrets file:
 backend/hft2/env
+
+# Large ML artifacts and logs (don't push to GitHub)
+catboost_info/
+*.log
+*.log.*
+backend/hft2/backend/security_id_list.csv
+backend/hft2/backend/stock_analysis/
