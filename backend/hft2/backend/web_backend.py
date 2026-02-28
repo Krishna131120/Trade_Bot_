@@ -3293,7 +3293,29 @@ def initialize_bot():
                 logger.warning(f"Config validation failed, using defaults: {validation_err}")
                 config = ConfigValidator.get_default_config()
                 config["mode"] = default_mode
-            # Always ensure credentials are set from env (even if validation failed)
+            # ----------------------------------------------------------------
+            # CLOUD FIX: Load Dhan credentials from MongoDB for the current user
+            # On Render, DHAN_CLIENT_ID is never set as a static env var.
+            # Credentials are stored per-user in MongoDB (via /api/demat-credentials).
+            # We inject them into os.environ here so ALL downstream os.getenv() calls work.
+            # ----------------------------------------------------------------
+            if not os.getenv("DHAN_CLIENT_ID"):
+                try:
+                    from auth import get_user_demat
+                    _uname = globals().get("_current_authed_user")
+                    if _uname:
+                        demat = get_user_demat(_uname)
+                        if demat:
+                            os.environ["DHAN_CLIENT_ID"] = demat.get("client_id", "")
+                            os.environ["DHAN_ACCESS_TOKEN"] = demat.get("access_token", "")
+                            logger.info(f"[MongoDB] Loaded Dhan credentials for user: {_uname}")
+                        else:
+                            logger.warning(f"[MongoDB] No demat credentials found for user: {_uname}")
+                    else:
+                        logger.warning("[MongoDB] No authenticated user context — cannot load Dhan credentials from MongoDB")
+                except Exception as _e:
+                    logger.error(f"[MongoDB] Failed to load Dhan credentials: {_e}")
+            # Now read from env (either was pre-set, or we just injected from MongoDB above)
             if os.getenv("DHAN_CLIENT_ID"):
                 config["dhan_client_id"] = os.getenv("DHAN_CLIENT_ID")
             if os.getenv("DHAN_ACCESS_TOKEN"):
@@ -4755,11 +4777,23 @@ async def place_order(req: OrderRequest):
 
 
 @app.post("/api/bot/start-with-symbol")
-async def start_bot_with_symbol(req: StartBotWithSymbolRequest):
+async def start_bot_with_symbol(req: StartBotWithSymbolRequest, request: Request):
     """Start the trading bot initialisation for a specific symbol and return immediately.
     The frontend connects to /api/stream to follow progress without timing out."""
-    global trading_bot
+    global trading_bot, _current_authed_user
     symbol = req.symbol
+    # Decode JWT to know which user is starting the bot (for MongoDB credential loading)
+    try:
+        from auth import decode_token
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.replace("Bearer ", "").strip()
+        if token:
+            payload = decode_token(token)
+            if payload:
+                _current_authed_user = payload.get("sub", "")
+                logger.info(f"[Bot Start] Authenticated user: {_current_authed_user}")
+    except Exception as _e:
+        logger.warning(f"[Bot Start] Could not decode JWT: {_e}")
     logger.info(f"[API] start-with-symbol requested for: {symbol}")
     # Fire-and-forget heavy work in background so endpoint returns in < 1 s
     asyncio.create_task(trigger_all_hft2_components_for_symbol(symbol))
