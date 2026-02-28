@@ -84,6 +84,7 @@ except ImportError as e:
     LIVE_TRADING_AVAILABLE = False
 
 # Import new agents for full-market RL scanning
+data_agent = rl_agent = tracker_agent = risk_engine = None  # fallback if torch/ML missing
 try:
     from core.data_agent import data_agent
     from core.rl_agent import rl_agent
@@ -91,7 +92,7 @@ try:
     from core.risk_engine import risk_engine
     logger.info("RL scanning agents loaded successfully")
 except ImportError as e:
-    logger.error(f"❌ RL agents import failed: {e}")
+    logger.error(f"❌ RL agents import failed: {e}. Running without RL agents.")
 
 # Architectural Fix: Graceful MCP dependency handling
 try:
@@ -3413,8 +3414,9 @@ def initialize_bot():
         # Apply risk level settings from loaded config
         apply_risk_level_settings(trading_bot, config["riskLevel"])
 
-        # Set the trading bot reference in the risk engine
-        risk_engine.set_trading_bot(trading_bot)
+        # Set the trading bot reference in the risk engine (skip if torch/ML agents not available)
+        if risk_engine is not None:
+            risk_engine.set_trading_bot(trading_bot)
 
         # Verify global was set
         import sys
